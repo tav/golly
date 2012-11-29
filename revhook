@@ -1,0 +1,17 @@
+# -*- mode: python -*-
+
+# Public Domain (-) 2010-2011 The Golly Authors.
+# See the Golly UNLICENSE file for details.
+
+from os.path import realpath
+
+@checker(include=['*.go'])
+def gofmt(changelist, files):
+    """Need to gofmt %s\n\n"""
+
+    for filename in files:
+        stdout, stderr, retcode = run('gofmt', '-l=true', filename)
+        if stdout:
+            changelist.error(
+                filename, "Please run:\n\n    gofmt -w %s" % realpath(filename)
+                )
