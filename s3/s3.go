@@ -28,9 +28,37 @@ type BucketsInfo struct {
 	Buckets []BucketInfo `xml:"Buckets>Bucket"`
 }
 
+type InitiatorInfo struct {
+	DisplayName string
+	ID          string
+}
+
+type MultipartUploadsInfo struct {
+	Bucket             string
+	CommonPrefixes     []string `xml:">Prefix"`
+	Delimiter          string
+	IsTruncated        bool
+	KeyMarker          string
+	MaxUploads         int
+	NextKeyMarker      string
+	NextUploadIdMarker string
+	Prefix             string
+	Upload             []UploadInfo
+	UploadIdMarker     string
+}
+
 type OwnerInfo struct {
 	DisplayName string
 	ID          string
+}
+
+type UploadInfo struct {
+	Key          string
+	Initiated    string
+	Initiator    InitiatorInfo
+	Owner        OwnerInfo
+	StorageClass string
+	UploadId     string
 }
 
 type RequestData struct {
@@ -41,7 +69,7 @@ type RequestData struct {
 	SecretKey     []byte
 }
 
-func (r *RequestData) Call(method, bucket, path, contentType string, recv interface{}) (*http.Response, error) {
+func (r *RequestData) Call(method, bucket, path, canonicalPath, contentType string, recv interface{}) (*http.Response, error) {
 	pad := []byte(method)
 	pad = append(pad, '\n')
 	pad = append(pad, '\n')
@@ -58,7 +86,7 @@ func (r *RequestData) Call(method, bucket, path, contentType string, recv interf
 	} else {
 		pad = append(pad, '/')
 		pad = append(pad, bucket...)
-		pad = append(pad, path...)
+		pad = append(pad, canonicalPath...)
 		path = "https://" + bucket + "." + r.Endpoint + path
 	}
 	url, err := url.Parse(path)
@@ -83,9 +111,17 @@ func (r *RequestData) Call(method, bucket, path, contentType string, recv interf
 	if r.RaiseResponse {
 		panic(resp)
 	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := ioutil.ReadAll(resp.Body)
+		max := len(body)
+		if len(body) > 1000 {
+			max = 1000
+		}
+		return nil, fmt.Errorf("s3 error: got %s on %s\n%s", resp.Status, path, body[:max])
+	}
 	if recv != nil {
 		err := xml.NewDecoder(resp.Body).Decode(recv)
-		resp.Body.Close()
 		return nil, err
 	}
 	body, _ := ioutil.ReadAll(resp.Body)
@@ -107,6 +143,7 @@ func (s *Service) Bucket(bucket string, region *aws.Region) *Bucket {
 	return &Bucket{
 		Name:               bucket,
 		LocationConstraint: region.S3LocationConstraint,
+		Region:             region.ID,
 		RequestData: &RequestData{
 			AuthBase:  s.RequestData.AuthBase,
 			Client:    s.RequestData.Client,
@@ -116,34 +153,43 @@ func (s *Service) Bucket(bucket string, region *aws.Region) *Bucket {
 }
 
 func (s *Service) ListBuckets() (*BucketsInfo, error) {
-	buckets := &BucketsInfo{}
-	_, err := s.RequestData.Call("GET", "", "/", "", buckets)
-	return buckets, err
+	info := &BucketsInfo{}
+	_, err := s.RequestData.Call("GET", "", "/", "/", "", info)
+	return info, err
 }
 
 type Bucket struct {
 	Name               string
 	LocationConstraint string
+	Region             string
 	RequestData        *RequestData
 }
 
 func (b *Bucket) do(method, path string, recv interface{}) (*http.Response, error) {
-	return b.RequestData.Call(method, b.Name, path, "", recv)
+	return b.RequestData.Call(method, b.Name, path, path, "", recv)
 }
 
-func (b *Bucket) doWithCT(method, path, contentType string, recv interface{}) (*http.Response, error) {
-	return b.RequestData.Call(method, b.Name, path, contentType, recv)
-}
-
-func (b *Bucket) CanAccess() bool {
+func (b *Bucket) CanAccess() (bool, error) {
 	resp, err := b.do("HEAD", "/", nil)
 	if err != nil {
-		return false
+		return false, err
 	}
 	if resp.StatusCode != 200 {
-		return false
+		return false, fmt.Errorf(
+			"s3 error: cannot access bucket %q in %s, got %s",
+			b.Name, b.Region, resp.Status)
 	}
-	return true
+	return true, nil
+}
+
+func (b *Bucket) ListMultipartUploads(opts *url.Values) (*MultipartUploadsInfo, error) {
+	info := &MultipartUploadsInfo{}
+	path := "/?uploads"
+	if opts != nil {
+		path = "/?uploads&" + opts.Encode()
+	}
+	_, err := b.RequestData.Call("GET", b.Name, path, "/?uploads", "", info)
+	return info, err
 }
 
 func New(accessKey, secretKey string, client *http.Client) *Service {
