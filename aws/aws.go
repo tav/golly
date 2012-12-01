@@ -23,7 +23,7 @@ func (r *Region) Clone() *Region {
 	}
 }
 
-func newRegion(id, name string) *Region {
+func awsRegion(id, name string) *Region {
 	r := &Region{ID: id, Name: name}
 	Regions[id] = r
 	Regions[name] = r
@@ -43,14 +43,14 @@ func newRegion(id, name string) *Region {
 }
 
 var (
-	APNorthEast1 = newRegion("ap-northeast-1", "Tokyo")
-	APSouthEast1 = newRegion("ap-southeast-1", "Singapore")
-	APSouthEast2 = newRegion("ap-southeast-2", "Sydney")
-	EUWest1      = newRegion("eu-west-1", "Ireland")
-	SAEast1      = newRegion("sa-east-1", "Sao Paulo")
-	USEast1      = newRegion("us-east-1", "N. Virginia")
-	USWest1      = newRegion("us-west-1", "Oregon")
-	USWest2      = newRegion("us-west-2", "Northern California")
+	APNorthEast1 = awsRegion("ap-northeast-1", "Tokyo")
+	APSouthEast1 = awsRegion("ap-southeast-1", "Singapore")
+	APSouthEast2 = awsRegion("ap-southeast-2", "Sydney")
+	EUWest1      = awsRegion("eu-west-1", "Ireland")
+	SAEast1      = awsRegion("sa-east-1", "Sao Paulo")
+	USEast1      = awsRegion("us-east-1", "N. Virginia")
+	USWest1      = awsRegion("us-west-1", "Oregon")
+	USWest2      = awsRegion("us-west-2", "Northern California")
 )
 
 // Regions contains a mapping of region identifiers and names to Region structs.
