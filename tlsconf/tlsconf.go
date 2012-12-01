@@ -13,6 +13,7 @@ import (
 	"crypto/x509"
 	"github.com/tav/golly/runtime"
 	"io/ioutil"
+	"os"
 	"time"
 )
 
