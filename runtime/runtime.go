@@ -321,11 +321,11 @@ func GetAddrListener(host string, port int) (string, net.Listener) {
 	if host == "" {
 		hostname, err := os.Hostname()
 		if err != nil {
-			panic(err)
+			StandardError(err)
 		}
 		addrs, err := net.LookupHost(hostname)
 		if err != nil {
-			panic(err)
+			StandardError(err)
 		}
 		for _, addr := range addrs {
 			if strings.Contains(addr, ":") || strings.HasPrefix(addr, "127.") {
@@ -335,7 +335,7 @@ func GetAddrListener(host string, port int) (string, net.Listener) {
 			break
 		}
 		if host == "" {
-			panic("Couldn't determine local IP address")
+			Error("Couldn't determine local IP address")
 		}
 	}
 	addr := fmt.Sprintf("%s:%d", host, port)
