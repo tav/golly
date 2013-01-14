@@ -1,4 +1,4 @@
-// Public Domain (-) 2010-2011 The Golly Authors.
+// Public Domain (-) 2010-2013 The Golly Authors.
 // See the Golly UNLICENSE file for details.
 
 // Package runtime package provides utilities to manage the runtime environment
@@ -10,6 +10,7 @@ import (
 	"github.com/tav/golly/command"
 	"github.com/tav/golly/log"
 	"github.com/tav/golly/optparse"
+	"net"
 	"os"
 	"os/signal"
 	"path"
@@ -312,6 +313,37 @@ func GetCPUCount() (count int) {
 		return 1
 	}
 	return count
+}
+
+// GetAddrListener tries to determine the IP address of the machine and binds a
+// TCP listener to it.
+func GetAddrListener(host string, port int) (string, net.Listener) {
+	if host == "" {
+		hostname, err := os.Hostname()
+		if err != nil {
+			panic(err)
+		}
+		addrs, err := net.LookupHost(hostname)
+		if err != nil {
+			panic(err)
+		}
+		for _, addr := range addrs {
+			if strings.Contains(addr, ":") || strings.HasPrefix(addr, "127.") {
+				continue
+			}
+			host = addr
+			break
+		}
+		if host == "" {
+			panic("Couldn't determine local IP address")
+		}
+	}
+	addr := fmt.Sprintf("%s:%d", host, port)
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		Error("Cannot listen on %s: %v", addr, err)
+	}
+	return addr, listener
 }
 
 func init() {
