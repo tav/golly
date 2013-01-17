@@ -1,11 +1,11 @@
-// Public Domain (-) 2012 The Golly Authors.
+// Public Domain (-) 2012-2013 The Golly Authors.
 // See the Golly UNLICENSE file for details.
 
 // Package httputil implements the parsing of HTTP Accept headers.
 package httputil
 
 import (
-	"amp/structure"
+	"github.com/tav/golly/structure"
 	"net/http"
 	"net/textproto"
 	"sort"
