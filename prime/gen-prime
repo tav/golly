@@ -1,0 +1,44 @@
+#! /usr/bin/env python
+
+# Public Domain (-) 2013 The Golly Authors.
+# See the Golly UNLICENSE file for details.
+
+import sys
+
+N = 100000
+
+print "// Public Domain (-) 2013 The Golly Authors."
+print "// See the Golly UNLICENSE file for details."
+print
+print "package prime"
+print
+print "const Count = %d" % N
+print
+print "var Numbers = [%d]int64{" % N
+
+# Find primes manually ...
+#
+# i = 0
+# j = 2
+# n = 2
+#
+# while i < N:
+#     if n % j:
+#         j += 1
+#     elif n == j:
+#         print "\t%d," % n
+#         n += 1
+#         i += 1
+#         j = 2
+#     else:
+#         n += 1
+#         j = 2
+
+i = 0
+for prime in sys.stdin.read().split():
+    if i == N:
+        break
+    print "\t%s," % prime
+    i += 1
+
+print "}"
