@@ -31,6 +31,7 @@ var (
 	ErrInvalidHandshake        = errors.New("websocket: client sent data before handshake complete")
 	ErrInvalidUpgradeHeader    = errors.New("websocket: upgrade != websocket")
 	ErrMissingKeyHeader        = errors.New("websocket: key missing or blank")
+	ErrMismatchingOrigin       = errors.New("websocket: origin does not match")
 )
 
 var (
@@ -39,11 +40,7 @@ var (
 )
 
 // Upgrade upgrades the HTTP server connection to the WebSocket protocol.
-func Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error, bool) {
-	return UpgradeWithProtocol(w, r, "")
-}
-
-func UpgradeWithProtocol(w http.ResponseWriter, r *http.Request, subProtocol string) (*Conn, error, bool) {
+func Upgrade(w http.ResponseWriter, r *http.Request, origin, subProtocol string) (*Conn, error, bool) {
 
 	wc, buf, err := w.(http.Hijacker).Hijack()
 	if err != nil {
@@ -60,6 +57,10 @@ func UpgradeWithProtocol(w http.ResponseWriter, r *http.Request, subProtocol str
 
 	if strings.ToLower(r.Header.Get("Upgrade")) != "websocket" {
 		return nil, ErrInvalidUpgradeHeader, false
+	}
+
+	if origin != "" && origin != r.Header.Get("Origin") {
+		return nil, ErrMismatchingOrigin, false
 	}
 
 	key := []byte(r.Header.Get("Sec-Websocket-Key"))
