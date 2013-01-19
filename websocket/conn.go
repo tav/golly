@@ -63,6 +63,7 @@ const (
 
 var (
 	ErrCloseSent              = errors.New("websocket: close sent")
+	ErrMessageExceedsMaxSize  = errors.New("websocket: message exceeds size accepted by server")
 	ErrUnexpectedContinuation = errors.New("websocket: unexpected continuation")
 	ErrUnexpectedDataFrame    = errors.New("websocket: unexpected text or binary frame")
 )
@@ -116,6 +117,7 @@ type Conn struct {
 	readErr     error
 	br          *bufio.Reader
 	readLength  int64 // bytes remaining in current frame.
+	readMaxSize int64 // limit incoming messages
 	readFinal   bool  // true the current message has more frames.
 	readSeq     int   // incremented to invalidate message readers.
 	readMaskPos int
@@ -518,6 +520,11 @@ func (c *Conn) advanceFrame() (int, error) {
 		c.readLength = int64(binary.BigEndian.Uint64(b[:8]))
 	}
 
+	if c.readMaxSize > 0 && c.readLength > c.readMaxSize {
+		c.WriteControl(OpClose, FormatCloseMessage(CloseProtocolError, "too large"), time.Now().Add(writeWait))
+		return -1, ErrMessageExceedsMaxSize
+	}
+
 	// 4. Handle frame masking.
 
 	if mask != c.isServer {
@@ -676,6 +683,10 @@ func (r messageReader) Read(b []byte) (n int, err error) {
 // the methods will not time out.
 func (c *Conn) SetReadDeadline(t time.Time) error {
 	return c.conn.SetReadDeadline(t)
+}
+
+func (c *Conn) SetReadMaxSize(limit int64) {
+	c.readMaxSize = limit
 }
 
 // FormatCloseMessage formats closeCode and text as a WebSocket close message.
