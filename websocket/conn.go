@@ -61,7 +61,11 @@ const (
 	OpPong         = 10
 )
 
-var ErrCloseSent = errors.New("websocket: close sent")
+var (
+	ErrCloseSent              = errors.New("websocket: close sent")
+	ErrUnexpectedContinuation = errors.New("websocket: unexpected continuation")
+	ErrUnexpectedDataFrame    = errors.New("websocket: unexpected text or binary frame")
+)
 
 var (
 	errBadWriteOpCode      = errors.New("websocket: bad write opcode")
@@ -622,7 +626,7 @@ func (c *Conn) NextReader() (opCode int, r io.Reader, err error) {
 			c.savedPong = nil
 			return OpPong, r, nil
 		case OpContinuation:
-			panic("unexpected continuation")
+			return -1, nil, ErrUnexpectedContinuation
 		}
 	}
 	return -1, nil, c.readErr
@@ -660,7 +664,7 @@ func (r messageReader) Read(b []byte) (n int, err error) {
 		opCode, r.c.readErr = r.c.advanceFrame()
 
 		if opCode == OpText || opCode == OpBinary {
-			panic("unexpected text or binary frame")
+			return 0, ErrUnexpectedDataFrame
 		}
 	}
 	return 0, r.c.readErr
