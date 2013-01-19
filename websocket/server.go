@@ -18,99 +18,84 @@
 package websocket
 
 import (
-	"bufio"
-	"bytes"
 	"crypto/sha1"
 	"encoding/base64"
 	"errors"
-	"net"
+	"fmt"
+	"net/http"
 	"strings"
 )
 
 var (
-	keyGUID = []byte("258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
+	ErrInvalidConnectionHeader = errors.New("websocket: connection header != upgrade")
+	ErrInvalidHandshake        = errors.New("websocket: client sent data before handshake complete")
+	ErrInvalidUpgradeHeader    = errors.New("websocket: upgrade != websocket")
+	ErrMissingKeyHeader        = errors.New("websocket: key missing or blank")
 )
 
-func headerHasValue(header map[string][]string, key string, value string) bool {
-	for _, v := range header[key] {
-		for _, s := range strings.Split(v, ",") {
-			if strings.EqualFold(value, strings.TrimSpace(s)) {
-				return true
-			}
-		}
-	}
-	return false
+var (
+	keyGUID        = []byte("258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
+	responseHeader = []byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ")
+)
+
+// Upgrade upgrades the HTTP server connection to the WebSocket protocol.
+func Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error, bool) {
+	return UpgradeWithProtocol(w, r, "")
 }
 
-// Upgrade upgrades the HTTP server connection to the WebSocket protocol. The
-// resp argument is any object that suports the http.Hijack interface
-// (http.ResponseWriter, Twister web.Responder, Indigo web.Responder).
-func Upgrade(resp interface{}, header map[string][]string, subProtocol string, readBufSize, writeBufSize int) (*Conn, error) {
+func UpgradeWithProtocol(w http.ResponseWriter, r *http.Request, subProtocol string) (*Conn, error, bool) {
 
-	if values := header["Sec-Websocket-Version"]; len(values) == 0 || values[0] != "13" {
-		return nil, errors.New("websocket: version != 13")
+	wc, buf, err := w.(http.Hijacker).Hijack()
+	if err != nil {
+		panic("websocket: hijack failed: " + err.Error())
 	}
 
-	if !headerHasValue(header, "Connection", "upgrade") {
-		return nil, errors.New("websocket: connection header != upgrade")
+	if version := r.Header.Get("Sec-Websocket-Version"); version != "13" {
+		return nil, fmt.Errorf("websocket: unsupported version %q", version), false
 	}
 
-	if !headerHasValue(header, "Upgrade", "websocket") {
-		return nil, errors.New("websocket: upgrade != websocket")
+	if strings.ToLower(r.Header.Get("Connection")) != "upgrade" {
+		return nil, ErrInvalidConnectionHeader, false
 	}
 
-	var key []byte
-	if values := header["Sec-Websocket-Key"]; len(values) == 0 || values[0] == "" {
-		return nil, errors.New("websocket: key missing or blank")
-	} else {
-		key = []byte(values[0])
+	if strings.ToLower(r.Header.Get("Upgrade")) != "websocket" {
+		return nil, ErrInvalidUpgradeHeader, false
+	}
+
+	key := []byte(r.Header.Get("Sec-Websocket-Key"))
+	if len(key) == 0 {
+		return nil, ErrMissingKeyHeader, false
 	}
 
 	h := sha1.New()
 	h.Write(key)
 	h.Write(keyGUID)
-	accpektKey := base64.StdEncoding.EncodeToString(h.Sum(nil))
 
-	var buf bytes.Buffer
-	buf.WriteString("HTTP/1.1 101 Switching Protocols")
-	buf.WriteString("\r\nUpgrade: websocket")
-	buf.WriteString("\r\nConnection: Upgrade")
-	buf.WriteString("\r\nSec-WebSocket-Accept: ")
-	buf.WriteString(accpektKey)
+	resp := make([]byte, 28)
+	base64.StdEncoding.Encode(resp, h.Sum(nil))
 	if subProtocol != "" {
-		buf.WriteString("\r\nSec-WebSocket-Protocol: ")
-		buf.WriteString(subProtocol)
+		resp = append(resp, "\r\nSec-WebSocket-Protocol: "...)
+		resp = append(resp, subProtocol...)
 	}
-	buf.WriteString("\r\n\r\n")
+	resp = append(resp, "\r\n\r\n"...)
 
-	var netConn net.Conn
-	var br *bufio.Reader
-	var err error
-
-	if h, ok := resp.(interface {
-		Hijack() (net.Conn, *bufio.Reader, error)
-	}); ok {
-		// Indigo, Twister
-		netConn, br, err = h.Hijack()
-	} else if h, ok := resp.(interface {
-		Hijack() (net.Conn, *bufio.ReadWriter, error)
-	}); ok {
-		// Standard HTTP package.
-		var rw *bufio.ReadWriter
-		netConn, rw, err = h.Hijack()
-		br = rw.Reader
-	} else {
-		return nil, errors.New("websocket: resp does not support Hijack")
+	if buf.Reader.Buffered() > 0 {
+		return nil, ErrInvalidHandshake, false
 	}
 
-	if br.Buffered() > 0 {
-		return nil, errors.New("websocket: client sent data before handshake complete")
+	if _, err = buf.Write(responseHeader); err != nil {
+		wc.Close()
+		return nil, err, true
+	}
+	if _, err = buf.Write(resp); err != nil {
+		wc.Close()
+		return nil, err, true
+	}
+	if err = buf.Flush(); err != nil {
+		wc.Close()
+		return nil, err, true
 	}
 
-	if _, err = netConn.Write(buf.Bytes()); err != nil {
-		netConn.Close()
-		return nil, err
-	}
+	return newConn(wc, true, 1024, 1024), nil, false
 
-	return newConn(netConn, true, readBufSize, writeBufSize), nil
 }
