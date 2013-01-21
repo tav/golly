@@ -315,30 +315,43 @@ func GetCPUCount() (count int) {
 	return count
 }
 
-// GetAddrListener tries to determine the IP address of the machine and binds a
-// TCP listener to it.
-func GetAddrListener(host string, port int) (string, net.Listener) {
-	if host == "" {
-		hostname, err := os.Hostname()
-		if err != nil {
-			StandardError(err)
-		}
-		addrs, err := net.LookupHost(hostname)
-		if err != nil {
-			StandardError(err)
-		}
-		for _, addr := range addrs {
-			if strings.Contains(addr, ":") || strings.HasPrefix(addr, "127.") {
-				continue
-			}
-			host = addr
-			break
-		}
-		if host == "" {
-			Error("Couldn't determine local IP address")
-		}
+// GetIP tries to determine the IP address of the current machine.
+func GetIP() string {
+	hostname, err := os.Hostname()
+	if err != nil {
+		StandardError(err)
 	}
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addrs, err := net.LookupHost(hostname)
+	if err != nil {
+		StandardError(err)
+	}
+	var ip string
+	for _, addr := range addrs {
+		if strings.Contains(addr, ":") || strings.HasPrefix(addr, "127.") {
+			continue
+		}
+		ip = addr
+		break
+	}
+	if ip == "" {
+		Error("Couldn't determine local IP address")
+	}
+	return ip
+}
+
+// GetAddr returns host:port and fills in empty host parameter with the current
+// machine's IP address if need be.
+func GetAddr(host string, port int) string {
+	if host == "" {
+		host = GetIP()
+	}
+	return fmt.Sprintf("%s:%d", host, port)
+}
+
+// GetAddrListener tries to determine the IP address of the machine when the
+// host variable is empty and binds a TCP listener to the given host:port.
+func GetAddrListener(host string, port int) (string, net.Listener) {
+	addr := GetAddr(host, port)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		Error("Cannot listen on %s: %v", addr, err)
