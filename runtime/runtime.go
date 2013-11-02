@@ -146,7 +146,7 @@ func InitProcess(name, runPath string) {
 }
 
 // DefaultOpts processes default runtime command line options.
-func DefaultOpts(name string, opts *optparse.OptionParser, argv []string) (bool, string, string, string) {
+func DefaultOpts(name string, opts *optparse.Parser, argv []string, autoExit bool) (bool, string, string, string, bool) {
 
 	var (
 		configPath        string
@@ -154,10 +154,10 @@ func DefaultOpts(name string, opts *optparse.OptionParser, argv []string) (bool,
 		err               error
 	)
 
-	debug := opts.Bool([]string{"-d", "--debug"}, false,
+	debug := opts.Bool([]string{"-d", "--debug"},
 		"enable debug mode")
 
-	genConfig := opts.Bool([]string{"-g", "--gen-config"}, false,
+	genConfig := opts.Bool([]string{"-g", "--gen-config"},
 		"show the default yaml config")
 
 	runDirectory := opts.StringConfig("run-dir", "run",
@@ -169,7 +169,7 @@ func DefaultOpts(name string, opts *optparse.OptionParser, argv []string) (bool,
 	logRotate := opts.StringConfig("log-rotate", "never",
 		"specify one of 'hourly', 'daily' or 'never' [never]")
 
-	noConsoleLog := opts.BoolConfig("no-console-log", false,
+	noConsoleLog := opts.BoolConfig("no-console-log",
 		"disable server requests being logged to the console [false]")
 
 	extraConfig := opts.StringConfig("extra-config", "",
@@ -212,8 +212,11 @@ func DefaultOpts(name string, opts *optparse.OptionParser, argv []string) (bool,
 			Profile = strings.Split(filepath.Base(configPath), ".")[0]
 		}
 	} else {
-		opts.PrintUsage()
-		Exit(0)
+		if autoExit {
+			opts.PrintUsage()
+			Exit(0)
+		}
+		return false, "", "", "", true
 	}
 
 	// Load the extra config file with additional options if one has been
@@ -277,7 +280,7 @@ func DefaultOpts(name string, opts *optparse.OptionParser, argv []string) (bool,
 		InitProcess(name, runPath)
 	}
 
-	return *debug, instanceDirectory, runPath, logPath
+	return *debug, instanceDirectory, runPath, logPath, false
 
 }
 
