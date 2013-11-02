@@ -1,4 +1,4 @@
-// Public Domain (-) 2010-2011 The Golly Authors.
+// Public Domain (-) 2010-2013 The Golly Authors.
 // See the Golly UNLICENSE file for details.
 
 // Package optparse provides utility functions for the parsing and
@@ -27,7 +27,7 @@ func (completer *listCompleter) Complete() []string {
 	return completer.items
 }
 
-func ListCompleter(items ...string) *listCompleter {
+func ListCompleter(items ...string) Completer {
 	return &listCompleter{items}
 }
 
@@ -42,10 +42,13 @@ func exit(message string, v ...interface{}) {
 
 type OptionParser struct {
 	Completer      Completer
-	Usage          string
-	Version        string
 	ParseHelp      bool
 	ParseVersion   bool
+	Usage          string
+	Version        string
+	nextCompleter  Completer
+	nextDest       string
+	nextRequired   bool
 	options        []*option
 	config2options map[string]*option
 	configflags    []string
@@ -70,7 +73,7 @@ type option struct {
 	requiredFlag   bool
 	shortflag      string
 	stringValue    *string
-	usage          string
+	description    string
 	valueType      string
 }
 
@@ -103,7 +106,7 @@ func (opt *option) String() (output string) {
 		}
 		output += string(padding)
 	}
-	output += opt.usage
+	output += opt.description
 	output += "\n"
 	return
 }
@@ -131,22 +134,12 @@ func (op *OptionParser) computeFlags(flags []string, opt *option) (configflag, s
 	return
 }
 
-func (op *OptionParser) Default(flags []string, usage string, displayDest bool, info ...interface{}) (opt *option) {
-	opt = &option{}
-	opt.usage = usage
+func (op *OptionParser) newOpt(flags []string, description string, displayDest bool) *option {
+	opt := &option{}
+	opt.description = description
 	opt.configflag, opt.shortflag, opt.longflag = op.computeFlags(flags, opt)
-	var required bool
-	var dest string
-	for _, prop := range info {
-		switch prop := prop.(type) {
-		case bool:
-			required = prop
-		case string:
-			dest = prop
-		case Completer:
-			opt.completer = prop
-		}
-	}
+	opt.completer = op.nextCompleter
+	required := op.nextRequired
 	if required {
 		if opt.configflag == "" {
 			opt.requiredFlag = true
@@ -155,8 +148,8 @@ func (op *OptionParser) Default(flags []string, usage string, displayDest bool, 
 		}
 	}
 	if displayDest {
-		if dest != "" {
-			opt.dest = dest
+		if op.nextDest != "" {
+			opt.dest = op.nextDest
 		} else {
 			if opt.longflag != "" {
 				opt.dest = strings.ToUpper(strings.TrimLeft(opt.longflag, "-"))
@@ -166,59 +159,87 @@ func (op *OptionParser) Default(flags []string, usage string, displayDest bool, 
 		}
 	}
 	op.options = append(op.options, opt)
-	return
+	op.nextCompleter = nil
+	op.nextDest = ""
+	op.nextRequired = false
+	return opt
 }
 
-func (op *OptionParser) Int(flags []string, value int, usage string, info ...interface{}) (result *int) {
-	opt := op.Default(flags, usage, true, info...)
+func (op *OptionParser) Int(flags []string, defaultValue int, description string) *int {
+	opt := op.newOpt(flags, description, true)
 	opt.valueType = "int"
-	opt.intValue = &value
-	return &value
+	opt.intValue = &defaultValue
+	return &defaultValue
 }
 
-func (op *OptionParser) String(flags []string, value string, usage string, info ...interface{}) (result *string) {
-	opt := op.Default(flags, usage, true, info...)
+func (op *OptionParser) String(flags []string, defaultValue string, description string) *string {
+	opt := op.newOpt(flags, description, true)
 	opt.valueType = "string"
-	opt.stringValue = &value
-	return &value
+	opt.stringValue = &defaultValue
+	return &defaultValue
 }
 
-func (op *OptionParser) Bool(flags []string, value bool, usage string) (result *bool) {
-	opt := op.Default(flags, usage, false)
+func (op *OptionParser) Bool(flags []string, description string) *bool {
+	defaultValue := false
+	opt := op.newOpt(flags, description, false)
 	opt.valueType = "bool"
-	opt.boolValue = &value
-	return &value
+	opt.boolValue = &defaultValue
+	return &defaultValue
 }
 
-func (op *OptionParser) IntConfig(flag string, value int, usage string, info ...interface{}) (result *int) {
-	opt := op.Default([]string{flag + ":", "--" + flag}, usage, false, info...)
+func (op *OptionParser) IntConfig(key string, defaultValue int, description string) *int {
+	opt := op.newOpt([]string{key + ":", "--" + key}, description, false)
 	opt.valueType = "int"
-	opt.intValue = &value
-	return &value
+	opt.intValue = &defaultValue
+	return &defaultValue
 }
 
-func (op *OptionParser) StringConfig(flag string, value string, usage string, info ...interface{}) (result *string) {
-	opt := op.Default([]string{flag + ":", "--" + flag}, usage, false, info...)
+func (op *OptionParser) StringConfig(key string, defaultValue string, description string) *string {
+	opt := op.newOpt([]string{key + ":", "--" + key}, description, false)
 	opt.valueType = "string"
-	opt.stringValue = &value
-	return &value
+	opt.stringValue = &defaultValue
+	return &defaultValue
 }
 
-func (op *OptionParser) BoolConfig(flag string, value bool, usage string) (result *bool) {
-	opt := op.Default([]string{flag + ":", "--" + flag}, usage, false)
+func (op *OptionParser) BoolConfig(key string, description string) *bool {
+	defaultValue := false
+	opt := op.newOpt([]string{key + ":", "--" + key}, description, false)
 	opt.valueType = "bool"
-	opt.boolValue = &value
-	return &value
+	opt.boolValue = &defaultValue
+	return &defaultValue
 }
 
+// Required indicates that the option parser should raise an
+// error if the next defined option is not specified.
+func (op *OptionParser) Required() *OptionParser {
+	op.nextRequired = true
+	return op
+}
+
+// WithOptCompleter will use the provided Completer to
+// autocomplete the next defined option.
+func (op *OptionParser) WithOptCompleter(c Completer) *OptionParser {
+	op.nextCompleter = c
+	return op
+}
+
+// As will use the given destination string for the next
+// defined option.
+func (op *OptionParser) As(destination string) *OptionParser {
+	op.nextDest = destination
+	return op
+}
+
+// Parse will parse the given args slice and try and define
+// the defined options.
 func (op *OptionParser) Parse(args []string) (remainder []string) {
 
 	if op.ParseHelp && !op.helpAdded {
-		op.Bool([]string{"-h", "--help"}, false, "show this help and exit")
+		op.Bool([]string{"-h", "--help"}, "show this help and exit")
 		op.helpAdded = true
 	}
 	if op.ParseVersion && !op.versionAdded {
-		op.Bool([]string{"-v", "--version"}, false, "show the version and exit")
+		op.Bool([]string{"-v", "--version"}, "show the version and exit")
 		op.versionAdded = true
 	}
 
@@ -458,8 +479,8 @@ func (op *OptionParser) PrintDefaultConfigFile(name string) {
 	}
 }
 
-func Parser(usage string, version ...string) (op *OptionParser) {
-	op = &OptionParser{}
+func Parser(usage string, version ...string) *OptionParser {
+	op := &OptionParser{}
 	op.long2options = make(map[string]*option)
 	op.short2options = make(map[string]*option)
 	op.config2options = make(map[string]*option)
