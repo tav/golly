@@ -40,7 +40,7 @@ func exit(message string, v ...interface{}) {
 	os.Exit(1)
 }
 
-type OptionParser struct {
+type Parser struct {
 	Completer      Completer
 	ParseHelp      bool
 	ParseVersion   bool
@@ -73,7 +73,7 @@ type option struct {
 	requiredFlag   bool
 	shortflag      string
 	stringValue    *string
-	description    string
+	descr          string
 	valueType      string
 }
 
@@ -106,12 +106,12 @@ func (opt *option) String() (output string) {
 		}
 		output += string(padding)
 	}
-	output += opt.description
+	output += opt.descr
 	output += "\n"
 	return
 }
 
-func (op *OptionParser) computeFlags(flags []string, opt *option) (configflag, shortflag, longflag string) {
+func (op *Parser) computeFlags(flags []string, opt *option) (configflag, shortflag, longflag string) {
 	for _, flag := range flags {
 		if strings.HasPrefix(flag, "--") {
 			longflag = flag
@@ -134,9 +134,9 @@ func (op *OptionParser) computeFlags(flags []string, opt *option) (configflag, s
 	return
 }
 
-func (op *OptionParser) newOpt(flags []string, description string, displayDest bool) *option {
+func (op *Parser) newOpt(flags []string, descr string, displayDest bool) *option {
 	opt := &option{}
-	opt.description = description
+	opt.descr = descr
 	opt.configflag, opt.shortflag, opt.longflag = op.computeFlags(flags, opt)
 	opt.completer = op.nextCompleter
 	required := op.nextRequired
@@ -165,45 +165,45 @@ func (op *OptionParser) newOpt(flags []string, description string, displayDest b
 	return opt
 }
 
-func (op *OptionParser) Int(flags []string, defaultValue int, description string) *int {
-	opt := op.newOpt(flags, description, true)
+func (op *Parser) Int(flags []string, defaultValue int, descr string) *int {
+	opt := op.newOpt(flags, descr, true)
 	opt.valueType = "int"
 	opt.intValue = &defaultValue
 	return &defaultValue
 }
 
-func (op *OptionParser) String(flags []string, defaultValue string, description string) *string {
-	opt := op.newOpt(flags, description, true)
+func (op *Parser) String(flags []string, defaultValue string, descr string) *string {
+	opt := op.newOpt(flags, descr, true)
 	opt.valueType = "string"
 	opt.stringValue = &defaultValue
 	return &defaultValue
 }
 
-func (op *OptionParser) Bool(flags []string, description string) *bool {
+func (op *Parser) Bool(flags []string, descr string) *bool {
 	defaultValue := false
-	opt := op.newOpt(flags, description, false)
+	opt := op.newOpt(flags, descr, false)
 	opt.valueType = "bool"
 	opt.boolValue = &defaultValue
 	return &defaultValue
 }
 
-func (op *OptionParser) IntConfig(key string, defaultValue int, description string) *int {
-	opt := op.newOpt([]string{key + ":", "--" + key}, description, false)
+func (op *Parser) IntConfig(key string, defaultValue int, descr string) *int {
+	opt := op.newOpt([]string{key + ":", "--" + key}, descr, false)
 	opt.valueType = "int"
 	opt.intValue = &defaultValue
 	return &defaultValue
 }
 
-func (op *OptionParser) StringConfig(key string, defaultValue string, description string) *string {
-	opt := op.newOpt([]string{key + ":", "--" + key}, description, false)
+func (op *Parser) StringConfig(key string, defaultValue string, descr string) *string {
+	opt := op.newOpt([]string{key + ":", "--" + key}, descr, false)
 	opt.valueType = "string"
 	opt.stringValue = &defaultValue
 	return &defaultValue
 }
 
-func (op *OptionParser) BoolConfig(key string, description string) *bool {
+func (op *Parser) BoolConfig(key string, descr string) *bool {
 	defaultValue := false
-	opt := op.newOpt([]string{key + ":", "--" + key}, description, false)
+	opt := op.newOpt([]string{key + ":", "--" + key}, descr, false)
 	opt.valueType = "bool"
 	opt.boolValue = &defaultValue
 	return &defaultValue
@@ -211,28 +211,28 @@ func (op *OptionParser) BoolConfig(key string, description string) *bool {
 
 // Required indicates that the option parser should raise an
 // error if the next defined option is not specified.
-func (op *OptionParser) Required() *OptionParser {
+func (op *Parser) Required() *Parser {
 	op.nextRequired = true
 	return op
 }
 
 // WithOptCompleter will use the provided Completer to
 // autocomplete the next defined option.
-func (op *OptionParser) WithOptCompleter(c Completer) *OptionParser {
+func (op *Parser) WithOptCompleter(c Completer) *Parser {
 	op.nextCompleter = c
 	return op
 }
 
 // As will use the given destination string for the next
 // defined option.
-func (op *OptionParser) As(destination string) *OptionParser {
+func (op *Parser) As(destination string) *Parser {
 	op.nextDest = destination
 	return op
 }
 
 // Parse will parse the given args slice and try and define
 // the defined options.
-func (op *OptionParser) Parse(args []string) (remainder []string) {
+func (op *Parser) Parse(args []string) (remainder []string) {
 
 	if op.ParseHelp && !op.helpAdded {
 		op.Bool([]string{"-h", "--help"}, "show this help and exit")
@@ -244,7 +244,7 @@ func (op *OptionParser) Parse(args []string) (remainder []string) {
 	}
 
 	argLength := len(args) - 1
-	complete, words, compWord, prefix := GetCompletionData()
+	complete, words, compWord, prefix := getCompletionData()
 
 	// Command-line auto-completion support.
 	if complete {
@@ -400,7 +400,7 @@ func (op *OptionParser) Parse(args []string) (remainder []string) {
 
 }
 
-func (op *OptionParser) ParseConfig(filename string, args []string) (err error) {
+func (op *Parser) ParseConfig(filename string, args []string) (err error) {
 
 	data, err := yaml.ParseDictFile(filename)
 	if err != nil {
@@ -442,7 +442,7 @@ func (op *OptionParser) ParseConfig(filename string, args []string) (err error) 
 
 }
 
-func (op *OptionParser) PrintUsage() {
+func (op *Parser) PrintUsage() {
 	fmt.Print(op.Usage)
 	if len(op.configflags) > 0 {
 		fmt.Print("\nConfig File Options:\n")
@@ -462,7 +462,7 @@ func (op *OptionParser) PrintUsage() {
 	}
 }
 
-func (op *OptionParser) PrintDefaultConfigFile(name string) {
+func (op *Parser) PrintDefaultConfigFile(name string) {
 	fmt.Printf("# %s.yaml\n\n", name)
 	for _, opt := range op.options {
 		if opt.configflag != "" {
@@ -479,8 +479,10 @@ func (op *OptionParser) PrintDefaultConfigFile(name string) {
 	}
 }
 
-func Parser(usage string, version ...string) *OptionParser {
-	op := &OptionParser{}
+// New takes the header and version for the usage string and
+// returns a fresh option parser.
+func New(usage string, version ...string) *Parser {
+	op := &Parser{}
 	op.long2options = make(map[string]*option)
 	op.short2options = make(map[string]*option)
 	op.config2options = make(map[string]*option)
@@ -496,7 +498,7 @@ func Parser(usage string, version ...string) *OptionParser {
 	return op
 }
 
-func GetCompletionData() (complete bool, words []string, compWord int, prefix string) {
+func getCompletionData() (complete bool, words []string, compWord int, prefix string) {
 
 	autocomplete := os.Getenv("OPTPARSE_AUTO_COMPLETE")
 	if autocomplete != "" {
@@ -541,8 +543,8 @@ func GetCompletionData() (complete bool, words []string, compWord int, prefix st
 
 }
 
-// Subcommands provides support for git subcommands style command handling.
-func Subcommands(name, version string, commands map[string]func([]string, string), commandsUsage map[string]string, additional ...string) {
+// SubCommands provides support for git subcommands style command handling.
+func SubCommands(name, version string, commands map[string]func([]string, string), commandsUsage map[string]string, additional ...string) {
 
 	var commandNames, helpCommands []string
 	var complete bool
@@ -592,7 +594,7 @@ func Subcommands(name, version string, commands map[string]func([]string, string
 	if _, ok := commands["help"]; !ok {
 		commands["help"] = func(args []string, usage string) {
 
-			opts := Parser(mainUsage)
+			opts := New(mainUsage)
 			opts.ParseHelp = false
 			opts.Completer = ListCompleter(helpCommands...)
 			helpArgs := opts.Parse(args)
@@ -625,7 +627,7 @@ func Subcommands(name, version string, commands map[string]func([]string, string
 	if len(version) != 0 {
 		if _, ok := commands["version"]; !ok {
 			commands["version"] = func(args []string, usage string) {
-				opts := Parser(fmt.Sprintf("Usage: %s version\n\n    %s\n", name, usage))
+				opts := New(fmt.Sprintf("Usage: %s version\n\n    %s\n", name, usage))
 				opts.Parse(args)
 				fmt.Printf("%s\n", version)
 				return
@@ -683,7 +685,7 @@ func Subcommands(name, version string, commands map[string]func([]string, string
 	mainUsage += fmt.Sprintf(
 		"\nSee `%s help <command>` for more info on a specific command.\n", name)
 
-	complete, words, compWord, prefix := GetCompletionData()
+	complete, words, compWord, prefix := getCompletionData()
 	baseLength := len(strings.Split(name, " "))
 	args := os.Args
 
