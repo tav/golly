@@ -154,7 +154,7 @@ func parseFile(path string, force bool) {
 	buf := &bytes.Buffer{}
 	buf.Write(header)
 	buf.Write([]byte(pkg.Name.Name))
-	buf.Write([]byte("\n\nimport (\n\t\"bytes\"\n\t\"encoding/base64\"\n\t\"io\"\n\t\"strconv\"\n\t\"time\"\n\t\"unicode/utf8\"\n)\n\n"))
+	buf.Write([]byte("\n\nimport (\n\t\"bytes\"\n\t\"encoding/base64\"\n\t\"strconv\"\n\t\"time\"\n\t\"unicode/utf8\"\n)\n\n"))
 
 	for _, model := range models {
 		ref := strings.ToLower(string(model.name[0]))
@@ -240,7 +240,7 @@ func parseFile(path string, force bool) {
 func read(buf *bytes.Buffer, lead, kind, selector string) {
 	switch kind {
 	case "[]byte":
-		fmt.Fprintf(buf, "%s%s, _ := base64.StdEncoding.DecodeString(val)\n", lead, selector)
+		fmt.Fprintf(buf, "%s%s, _ = base64.StdEncoding.DecodeString(val)\n", lead, selector)
 	case "string":
 		fmt.Fprintf(buf, "%s%s = val\n", lead, selector)
 	case "int":
