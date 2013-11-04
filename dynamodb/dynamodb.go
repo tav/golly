@@ -4,54 +4,21 @@
 package dynamodb
 
 import (
-	"net/http"
+	"bytes"
 )
 
-type Field struct {
-	Name  string
-	Value string
-	Type  string
-}
-
-func (f *Field) MarshalJSON() ([]byte, error) {
-}
-
-type Item []*Field
-
-func (f *Field) Binary() ([]byte, bool) {
-
-}
-
-func (f *Field) BinarySet() *Field {
-}
-
-func (f *Field) Float() (float64, bool) {
-}
-
-func (f *Field) FloatSet() ([]float64, bool) {
-}
-
-func (f *Field) Integer() (int64, bool) {
-}
-
-func (f *Field) IntegerSet() ([]int64, bool) {
-}
-
-func (f *Field) String() (string, bool) {
-}
-
-func (f *Field) StringSet() ([]string, bool) {
+type Item interface {
+	Encode(buf *bytes.Buffer)
+	Decode(data map[string]map[string]interface{})
 }
 
 type Client struct {
 	endpoint string
-	db       map[string]string
 }
 
 func (c *Client) Get() {
-
 }
 
 func Dial(endpoint string) *Client {
-
+	return &Client{}
 }
