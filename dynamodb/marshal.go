@@ -18,6 +18,8 @@ import (
 const (
 	binaryField int = iota
 	binarySetField
+	boolField
+	boolSetField
 	intField
 	intSetField
 	int64Field
@@ -34,6 +36,8 @@ const (
 var kindMap = [...]string{
 	binaryField:    "B",
 	binarySetField: "BS",
+	boolField:      "N",
+	boolSetField:   "NS",
 	intField:       "N",
 	intSetField:    "NS",
 	int64Field:     "N",
@@ -126,6 +130,27 @@ func encode(v interface{}, buf *bytes.Buffer) {
 					buf.WriteString(`",`)
 				}
 			}
+		case boolField:
+			if fv.Interface().(bool) {
+				buf.WriteByte('1')
+			} else {
+				buf.WriteByte('0')
+			}
+		case boolSetField:
+			elems := fv.Interface().([]bool)
+			for j, elem := range elems {
+				buf.WriteByte('"')
+				if elem {
+					buf.WriteByte('1')
+				} else {
+					buf.WriteByte('0')
+				}
+				if j == len(elems)-1 {
+					buf.WriteByte('"')
+				} else {
+					buf.WriteString(`",`)
+				}
+			}
 		case stringField:
 			toJSON(fv.Interface().(string), buf)
 		case stringSetField:
@@ -203,6 +228,131 @@ func encode(v interface{}, buf *bytes.Buffer) {
 
 }
 
+func Decode(v interface{}, data map[string]map[string]interface{}) {
+	decode(v, data)
+}
+
+func decode(v interface{}, data map[string]map[string]interface{}) {
+
+	if item, ok := v.(Item); ok {
+		item.Decode(data)
+		return
+	}
+
+	rv := reflect.ValueOf(v)
+	if !rv.IsValid() {
+		panic("cannot decode into invalid value")
+	}
+	rt := rv.Type()
+
+	mutex.RLock()
+	fields, present := typeInfo[rt]
+	mutex.RUnlock()
+	if !present {
+		fields = compile(rt)
+	}
+
+	rv = rv.Elem()
+	for _, field := range fields {
+		switch field.kind {
+		case binaryField, boolField, intField, int64Field, stringField, timeField, uintField, uint64Field:
+			if val, ok := data[field.name][kindMap[field.kind]].(string); ok {
+				switch field.kind {
+				case binaryField:
+					tmp, _ := base64.StdEncoding.DecodeString(val)
+					rv.Field(field.index).SetBytes(tmp)
+				case boolField:
+					if val == "1" {
+						rv.Field(field.index).SetBool(true)
+					} else if val == "0" {
+						rv.Field(field.index).SetBool(false)
+					}
+				case stringField:
+					rv.Field(field.index).SetString(val)
+				case intField:
+					tmp, _ := strconv.ParseInt(val, 10, 64)
+					rv.Field(field.index).SetInt(tmp)
+				case int64Field:
+					tmp, _ := strconv.ParseInt(val, 10, 64)
+					rv.Field(field.index).SetInt(tmp)
+				case uintField:
+					tmp, _ := strconv.ParseUint(val, 10, 64)
+					rv.Field(field.index).SetUint(tmp)
+				case uint64Field:
+					tmp, _ := strconv.ParseUint(val, 10, 64)
+					rv.Field(field.index).SetUint(tmp)
+				case timeField:
+					tmp, _ := strconv.ParseInt(val, 10, 64)
+					bin, err := time.Unix(0, tmp).MarshalBinary()
+					if err == nil {
+						if tobj, ok := rv.Field(field.index).Interface().(time.Time); ok {
+							tobj.UnmarshalBinary(bin)
+							rv.Field(field.index).Set(reflect.ValueOf(tobj))
+						}
+					}
+				}
+			}
+		case binarySetField, boolSetField, intSetField, int64SetField, stringSetField, uintSetField, uint64SetField:
+			if svals, ok := data[field.name][kindMap[field.kind]].([]interface{}); ok {
+				vals := make([]string, len(svals))
+				for k, val := range svals {
+					vals[k] = val.(string)
+				}
+				switch field.kind {
+				case binarySetField:
+					nv := make([][]byte, len(vals))
+					for j, val := range vals {
+						tmp, _ := base64.StdEncoding.DecodeString(val)
+						nv[j] = tmp
+					}
+					rv.Field(field.index).Set(reflect.ValueOf(nv))
+				case boolSetField:
+					nv := make([]bool, len(vals))
+					for j, val := range vals {
+						if val == "1" {
+							nv[j] = true
+						} else if val == "0" {
+							nv[j] = false
+						}
+					}
+					rv.Field(field.index).Set(reflect.ValueOf(nv))
+				case stringSetField:
+					rv.Field(field.index).Set(reflect.ValueOf(vals))
+				case intSetField:
+					nv := make([]int, len(vals))
+					for j, val := range vals {
+						tmp, _ := strconv.ParseInt(val, 10, 64)
+						nv[j] = int(tmp)
+					}
+					rv.Field(field.index).Set(reflect.ValueOf(nv))
+				case int64SetField:
+					nv := make([]int64, len(vals))
+					for j, val := range vals {
+						tmp, _ := strconv.ParseInt(val, 10, 64)
+						nv[j] = tmp
+					}
+					rv.Field(field.index).Set(reflect.ValueOf(nv))
+				case uintSetField:
+					nv := make([]uint, len(vals))
+					for j, val := range vals {
+						tmp, _ := strconv.ParseUint(val, 10, 64)
+						nv[j] = uint(tmp)
+					}
+					rv.Field(field.index).Set(reflect.ValueOf(nv))
+				case uint64SetField:
+					nv := make([]uint64, len(vals))
+					for j, val := range vals {
+						tmp, _ := strconv.ParseUint(val, 10, 64)
+						nv[j] = tmp
+					}
+					rv.Field(field.index).Set(reflect.ValueOf(nv))
+				}
+			}
+		}
+	}
+
+}
+
 func compile(it reflect.Type) []*fieldInfo {
 
 	if it.Kind() != reflect.Ptr {
@@ -256,6 +406,8 @@ func compile(it reflect.Type) []*fieldInfo {
 				kind = uintSetField
 			case reflect.Uint64:
 				kind = uint64SetField
+			case reflect.Bool:
+				kind = boolSetField
 			}
 		case reflect.Int:
 			kind = intField
@@ -269,6 +421,8 @@ func compile(it reflect.Type) []*fieldInfo {
 			kind = uintField
 		case reflect.Uint64:
 			kind = uint64Field
+		case reflect.Bool:
+			kind = boolField
 		}
 		if kind == -1 {
 			panic("dynamodb: unsupported field type: " + field.Type.Elem().Kind().String())

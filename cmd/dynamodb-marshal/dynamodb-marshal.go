@@ -38,6 +38,7 @@ package `)
 
 var kindMap = map[string]string{
 	"[]byte":   "B",
+	"bool":     "N",
 	"int":      "N",
 	"int64":    "N",
 	"string":   "S",
@@ -45,6 +46,7 @@ var kindMap = map[string]string{
 	"uint":     "N",
 	"uint64":   "N",
 	"[][]byte": "BS",
+	"[]bool":   "NS",
 	"[]int":    "NS",
 	"[]int64":  "NS",
 	"[]string": "SS",
@@ -100,7 +102,7 @@ func parseFile(path string, force bool) {
 				switch expr := field.Type.(type) {
 				case *ast.Ident:
 					switch expr.Name {
-					case "string", "int", "int64", "uint", "uint64":
+					case "bool", "string", "int", "int64", "uint", "uint64":
 						kind = expr.Name
 					}
 				case *ast.ArrayType:
@@ -108,7 +110,7 @@ func parseFile(path string, force bool) {
 						switch iexpr := expr.Elt.(type) {
 						case *ast.Ident:
 							switch iexpr.Name {
-							case "byte", "string", "int", "int64", "uint", "uint64":
+							case "byte", "bool", "string", "int", "int64", "uint", "uint64":
 								kind = "[]" + iexpr.Name
 							}
 						case *ast.ArrayType:
@@ -203,22 +205,22 @@ func parseFile(path string, force bool) {
 		fmt.Fprintf(buf, "}\n\n")
 		fmt.Fprintf(buf, "func (%s *%s) Decode(data map[string]map[string]interface{}) {\n", ref, model.name)
 		close = ""
-		for idx, field := range model.fields {
+		for _, field := range model.fields {
 			dbKind, ok := kindMap[field.kind]
 			if !ok {
 				continue
 			}
 			selector := fmt.Sprintf("%s.%s", ref, field.name)
 			if len(dbKind) == 2 {
-				fmt.Fprintf(buf, "%s\tif vals, ok := data[\"%s\"][\"%s\"].([]string); ok {\n", close, field.dbName, dbKind)
-				fmt.Fprint(buf, "\t\tfor _, val := range vals {\n")
+				fmt.Fprintf(buf, "%s\tif vals, ok := data[\"%s\"][\"%s\"].([]interface{}); ok {\n", close, field.dbName, dbKind)
+				fmt.Fprint(buf, "\t\tfor _, sval := range vals {\n")
+				fmt.Fprint(buf, "\t\t\tval := sval.(string)\n")
 				readMulti(buf, "\t\t\t", field.kind, selector)
 				fmt.Fprint(buf, "\t\t}\n")
 			} else {
 				fmt.Fprintf(buf, "%s\tif val, ok := data[\"%s\"][\"%s\"].(string); ok {\n", close, field.dbName, dbKind)
 				read(buf, "\t\t", field.kind, selector)
 			}
-			_ = idx
 			close = "\t}\n"
 		}
 		fmt.Fprintf(buf, "%s}\n\n", close)
@@ -241,6 +243,12 @@ func read(buf *bytes.Buffer, lead, kind, selector string) {
 	switch kind {
 	case "[]byte":
 		fmt.Fprintf(buf, "%s%s, _ = base64.StdEncoding.DecodeString(val)\n", lead, selector)
+	case "bool":
+		fmt.Fprintf(buf, "%sif val == \"1\" {\n", lead)
+		fmt.Fprintf(buf, "%s\t%s = true\n", lead, selector)
+		fmt.Fprintf(buf, "%s} else if val == \"0\" {\n", lead)
+		fmt.Fprintf(buf, "%s\t%s = false\n", lead, selector)
+		fmt.Fprintf(buf, "%s}\n", lead)
 	case "string":
 		fmt.Fprintf(buf, "%s%s = val\n", lead, selector)
 	case "int":
@@ -264,6 +272,12 @@ func readMulti(buf *bytes.Buffer, lead, kind, selector string) {
 	case "[][]byte":
 		fmt.Fprintf(buf, "%stmp, _ := base64.StdEncoding.DecodeString(val)\n", lead)
 		fmt.Fprintf(buf, "%s%s = append(%s, tmp)\n", lead, selector, selector)
+	case "bool":
+		fmt.Fprintf(buf, "%sif val == \"1\" {\n", lead)
+		fmt.Fprintf(buf, "%s\t%s = append(%s, true)\n", lead, selector, selector)
+		fmt.Fprintf(buf, "%s} else if val == \"0\" {\n", lead)
+		fmt.Fprintf(buf, "%s\t%s = append(%s, false)\n", lead, selector, selector)
+		fmt.Fprintf(buf, "%s}\n", lead)
 	case "[]string":
 		fmt.Fprintf(buf, "%s%s = append(%s, val)\n", lead, selector, selector)
 	case "[]int":
@@ -285,6 +299,12 @@ func write(buf *bytes.Buffer, lead, kind, selector string) {
 	switch kind {
 	case "[]byte":
 		fmt.Fprintf(buf, "%sbuf.WriteString(base64.StdEncoding.EncodeToString(%s))\n", lead, selector)
+	case "bool":
+		fmt.Fprintf(buf, "%sif %s {\n", lead, selector)
+		fmt.Fprintf(buf, "%s\tbuf.WriteByte('1')\n", lead)
+		fmt.Fprintf(buf, "%s} else {\n", lead)
+		fmt.Fprintf(buf, "%s\tbuf.WriteByte('0')\n", lead)
+		fmt.Fprintf(buf, "%s}\n", lead)
 	case "string":
 		fmt.Fprintf(buf, "%stoJSON(%s, buf)\n", lead, selector)
 	case "int":
