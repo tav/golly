@@ -63,12 +63,6 @@ type fieldInfo struct {
 	name  string
 }
 
-func Encode(v interface{}) string {
-	buf := &bytes.Buffer{}
-	encode(v, buf)
-	return buf.String()
-}
-
 func encode(v interface{}, buf *bytes.Buffer) {
 
 	if item, ok := v.(Item); ok {
@@ -226,10 +220,6 @@ func encode(v interface{}, buf *bytes.Buffer) {
 		fmt.Fprintf(buf, "%s}", close[:len(close)-1])
 	}
 
-}
-
-func Decode(v interface{}, data map[string]map[string]interface{}) {
-	decode(v, data)
 }
 
 func decode(v interface{}, data map[string]map[string]interface{}) {
@@ -445,7 +435,7 @@ func compile(it reflect.Type) []*fieldInfo {
 
 // Adapted from the encoding/json package in the standard
 // library.
-const hex = "0123456789abcdef"
+const hexstr = "0123456789abcdef"
 
 func toJSON(s string, buf *bytes.Buffer) {
 	start := 0
@@ -470,8 +460,8 @@ func toJSON(s string, buf *bytes.Buffer) {
 				buf.WriteByte('r')
 			default:
 				buf.WriteString(`\u00`)
-				buf.WriteByte(hex[b>>4])
-				buf.WriteByte(hex[b&0xF])
+				buf.WriteByte(hexstr[b>>4])
+				buf.WriteByte(hexstr[b&0xF])
 			}
 			i++
 			start = i
