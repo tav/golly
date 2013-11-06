@@ -13,6 +13,17 @@
 //
 //     secret := dynamodb.Auth("accessKey", "secretKey")
 //     client := dynamodb.Dial(dynamodb.USWest1, secret, nil)
+//
+//     query := table.Query()
+//     query.Sort('-').Limit(20)
+//
+//     resp, err := dynamodb.Call("CreateTable", dynamodb.Map{
+//         "TableName": "mytable",
+//         "ProvisionedThroughput": dynamodb.Map{
+//             "ReadCapacityUnits": 5,
+//             "WriteCapacityUnits": 5,
+//         },
+//     })
 package dynamodb
 
 import (
@@ -25,7 +36,7 @@ import (
 	"github.com/tav/golly/tlsconf"
 	"io/ioutil"
 	"net/http"
-	"sync"
+	"strings"
 	"time"
 )
 
@@ -93,6 +104,43 @@ func Auth(accessKey, secretKey string) auth {
 	}
 }
 
+// Error represents all responses to DynamoDB API calls with
+// an HTTP status code other than 200.
+type Error struct {
+	Body       []byte
+	StatusCode int
+}
+
+// Error satisfies the default error interface and
+// automatically tries to parse any JSON response that
+// DynamoDB may have sent in order to provide a useful error
+// message.
+func (e Error) Error() string {
+	errtype, message := e.Info()
+	if errtype == "" || message == "" {
+		return fmt.Sprintf("dynamodb: error with http status code %d", e.StatusCode)
+	}
+	return fmt.Sprintf("dynamodb: %s: %s", errtype, message)
+}
+
+// Info tries to parse the error type and message from the
+// JSON body that DynamoDB may have responded with.
+func (e Error) Info() (errtype string, message string) {
+	if e.Body == nil {
+		return
+	}
+	info := map[string]string{}
+	if json.Unmarshal(e.Body, &info) != nil {
+		return
+	}
+	errtype = info["__type"]
+	idx := strings.Index(errtype, "#")
+	if idx > 0 {
+		errtype = errtype[idx+1:]
+	}
+	return errtype, info["message"]
+}
+
 // Item specifies an interface for encoding and decoding a
 // struct into the custom JSON format required by DynamoDB.
 // The dynamodb-marshal tool, that accompanies this package
@@ -139,7 +187,9 @@ type Item interface {
 type Key struct {
 }
 
-type Options map[string]interface{}
+// Map provides a shortcut for the abstract data type used
+// in all DynamoDB API calls.
+type Map map[string]interface{}
 
 type Query struct {
 	table      *Table
@@ -151,20 +201,19 @@ type Query struct {
 	selector   string
 }
 
-func (q *Query) Ascending() *Query {
-	q.descending = false
+func (q *Query) Sort(order byte) *Query {
+	if order == '+' {
+		q.descending = false
+	} else if order == '-' {
+		q.descending = true
+	}
 	return q
 }
 
-func (q *Query) Descending() *Query {
-	q.descending = true
-	return q
-}
-
-func (q *Query) EventuallyConsistent() *Query {
-	q.eventually = true
-	return q
-}
+// func (q *Query) EventuallyConsistent() *Query {
+// 	q.eventually = true
+// 	return q
+// }
 
 func (q *Query) Index(name string) *Query {
 	q.index = name
@@ -180,8 +229,9 @@ func (q *Query) Limit(n int) *Query {
 	return q
 }
 
-func (q *Query) Run() error {
-	return q.table.client.makeRequest("Query", payload)
+func (q *Query) Run(consistent bool) error {
+	// q.table.client.makeRequest("Query", payload)
+	return nil
 }
 
 func (q *Query) Select(mechanism string) *Query {
@@ -195,33 +245,28 @@ func (q *Query) WithCursor(key Key) *Query {
 }
 
 type Table struct {
-	client     *Client
-	eventually bool
-	mutex      sync.RWMutex
-	name       string
-}
-
-func (t *Table) CheckAndSet(key Key) error {
-	return c.makeRequest("PutItem", payload)
-}
-
-func (t *Table) EventuallyConsistent() *Table {
-	t.mutex.Lock()
-	t.eventually = true
-	t.mutex.Unlock()
-	return t
+	client *Client
+	name   string
 }
 
 func (t *Table) Get(key Key) error {
-	return c.makeRequest("GetItem", payload)
+	// return c.makeRequest("GetItem", payload)
+	return nil
 }
 
 func (t *Table) Delete(key Key) error {
-	return c.makeRequest("DeleteItem", payload)
+	// return c.makeRequest("DeleteItem", payload)
+	return nil
 }
 
 func (t *Table) Put(key Key) error {
-	return c.makeRequest("PutItem", payload)
+	// return c.makeRequest("PutItem", payload)
+	return nil
+}
+
+func (t *Table) PutIf(key Key) error {
+	// return c.makeRequest("PutItem", payload)
+	return nil
 }
 
 func (t *Table) Query() *Query {
@@ -229,7 +274,8 @@ func (t *Table) Query() *Query {
 }
 
 func (t *Table) Update(key Key) error {
-	return c.makeRequest("UpdateItem", payload)
+	// return c.makeRequest("UpdateItem", payload)
+	return nil
 }
 
 type Client struct {
@@ -239,7 +285,10 @@ type Client struct {
 }
 
 // Call does the heavy-lifting of initiating a DynamoDB API
-// call and returns the response data.
+// call and parsing the JSON response into a map.
+//
+// It's best to call certain API methods directly using this
+// method:
 //
 //  - CreateTable
 //  - DescribeTable
@@ -247,28 +296,31 @@ type Client struct {
 //  - ListTables
 //  - UpdateTable
 //
-// The above API methods are best initiated via the Call
-// method.
-func (c *Client) Call(method string, opts Options) (resp Options, err error) {
-	payload, err := json.Marshal(opts)
-	fmt.Println("PAYLOAD: ", string(payload))
-	if err != nil {
-		return err
+func (c *Client) Call(method string, params Map) (resp Map, err error) {
+	var payload []byte
+	if params == nil {
+		payload = []byte{'{', '}'}
+	} else {
+		payload, err = json.Marshal(params)
+		if err != nil {
+			return
+		}
 	}
-	body, err := c.makeRequest(method, payload)
-	fmt.Println("RESP PAYLOAD: ", string(body))
+	// fmt.Println("PAYLOAD: ", string(payload))
+	payload, err = c.makeRequest(method, payload)
+	// fmt.Println("RESP PAYLOAD: ", string(payload))
 	if err != nil {
-		return err
+		return
 	}
-	resp = Options{}
-	return json.Unmarshal(body, &resp)
+	resp = Map{}
+	err = json.Unmarshal(payload, &resp)
+	return
 }
 
 func (c *Client) Table(name string) *Table {
 	return &Table{
-		client:      c,
-		consistency: true,
-		name:        name,
+		client: c,
+		name:   name,
 	}
 }
 
@@ -305,8 +357,10 @@ func (c *Client) makeRequest(method string, payload []byte) ([]byte, error) {
 		return nil, err
 	}
 	if resp.StatusCode != 200 {
-		fmt.Println("NOT 200")
-		fmt.Println(string(body))
+		return nil, Error{
+			Body:       body,
+			StatusCode: resp.StatusCode,
+		}
 	}
 	return body, nil
 }
