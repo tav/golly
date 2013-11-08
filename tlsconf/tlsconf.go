@@ -1,17 +1,47 @@
-// Public Domain (-) 2010-2011 The Golly Authors.
+// Public Domain (-) 2010-2013 The Golly Authors.
 // See the Golly UNLICENSE file for details.
 
-// Package tls provides utility functions to support TLS connections.
+// Package tlsconf provides utility functions to support
+// secure TLS configurations.
 //
-// When the package is initialised via tlsconf.Init(), it generates a default
-// configuration from the TLS Certificate data found in the $CACERT file.
+// It deals with the commonly overlooked issue of having the
+// up-to-date root certificates data for trusted Certificate
+// Authorities.
+//
+// When the package is initialised, it generates a global
+// tlsconf.Config from the file specified in the $CACERT
+// environment variable. This file should be PEM-encoded and
+// contain the list of trusted TLS root certificates.
+//
+// The best way to generate such a file is to use the
+// excellent extract-nss-root-certs tool written by Adam
+// Langley, e.g.
+//
+//     $ go get github.com/agl/extract-nss-root-certs
+//
+// Grab the latest certificate data from Mozilla:
+//
+//     $ curl -O https://hg.mozilla.org/mozilla-central/raw-file/tip/security/nss/lib/ckfw/builtins/certdata.txt
+//
+// And generate the root certificate file:
+//
+//     $ extract-nss-root-certs certdata.txt > ca.certs
+//
+// And, then, finally, export it as the $CACERT environment
+// variable to make it accessible to all programs which use
+// this tlsconf package, i.e.
+//
+//     $ export CACERT=`pwd`/ca.certs
+//
+// Developers can then just use tlsconf.Config wherever they
+// need to use a properly configured *tls.Config.
 package tlsconf
 
 import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"github.com/tav/golly/runtime"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"time"
@@ -19,8 +49,10 @@ import (
 
 var Config *tls.Config
 
-func GenConfig(file string) (config *tls.Config, err error) {
-	data, err := ioutil.ReadFile(file)
+// Load provides a utility function to create a tls.Config
+// from a PEM file containing trusted root certificates.
+func Load(certpath string) (*tls.Config, error) {
+	data, err := ioutil.ReadFile(certpath)
 	if err != nil {
 		return nil, err
 	}
@@ -34,17 +66,18 @@ func GenConfig(file string) (config *tls.Config, err error) {
 	return config, nil
 }
 
-// Init loads the data within the $CACERT file and initialises the
+// init loads the data within the $CACERT file and initialises the
 // tlsconf.Config variable.
-func Init() {
+func init() {
 	path := os.Getenv("CACERT")
 	if path == "" {
-		runtime.Error("The $CACERT environment variable hasn't been set!")
-		return
+		fmt.Println("ERROR: The $CACERT environment variable hasn't been set!")
+		os.Exit(1)
 	}
 	var err error
-	Config, err = GenConfig(path)
+	Config, err = Load(path)
 	if err != nil {
-		runtime.Error("Couldn't load %s: %s", path, err)
+		fmt.Printf("ERROR: Couldn't load $CACERT file %s: %s\n", path, err)
+		os.Exit(1)
 	}
 }
