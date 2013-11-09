@@ -1,8 +1,49 @@
 // Public Domain (-) 2012-2013 The Golly Authors.
 // See the Golly UNLICENSE file for details.
 
-// Package DynamoDB implements a client library for
-// interfacing with Amazon's NoSQL Database Service.
+// Package dynamodb implements a client library for
+// interfacing with DynamoDB, Amazon's NoSQL Database
+// Service.
+//
+// To start with, make sure that you have the appropriate
+// AWS keys to instantiate an auth object:
+//
+//     auth := dynamodb.Auth("your-access-key", "your-secret-key")
+//
+// Next, assuming you are connecting directly to  Amazon's
+// servers, choose one of the predefined endpoints like
+// USEast1, EUWest1, etc.
+//
+//     endpoint := dynamodb.USWest2
+//
+// If you happen to be connecting to a region which hasn't
+// been defined yet or want to connect to a DynamoDB Local
+// instance for development, define your own custom
+// endpoint, e.g.
+//
+//     endpoint := dynamodb.EndPoint("DynamoDB Local", "home", "localhost:8000", false)
+//
+// You are now ready to Dial the endpoint and instantiate a client:
+//
+//     client := dynamodb.Dial(endpoint, auth, nil)
+//
+// The third parameter is normally nil to Dial lets you specify a custom
+// http.Transport should you need one. This is particularly
+// useful in PaaS environments like Google App Engine where
+// you might not be able use the standard transport. If you
+// specify nil
+//
+// For example, on a restricted environment like Google App
+// Engine, where the standard transport isn't available, you
+// can use the transport they expose via the
+// appengine/urlfetch package:
+//
+//     transport := &urlfetch.Transport{
+//         Context:  appengine.NewContext(req),
+//         Deadline: 10 * time.Second,
+//     }
+//
+//     client := dynamodb.Dial(endpoint, auth, transport)
 //
 // The heart of the package revolves around the Client. You
 // instantiate it by calling Dial with an endpoint and
@@ -11,13 +52,13 @@
 //
 //     import "dynamodb"
 //
-//     secret := dynamodb.Auth("accessKey", "secretKey")
+//     auth := dynamodb.Auth("your-access-key", "your-secret-key")
 //     client := dynamodb.Dial(dynamodb.USWest1, secret, nil)
 //
 //     query := table.Query()
 //     query.Sort('-').Limit(20)
 //
-//     resp, err := dynamodb.Call("CreateTable", dynamodb.Map{
+//     resp, err := client.Call("CreateTable", dynamodb.Map{
 //         "TableName": "mytable",
 //         "ProvisionedThroughput": dynamodb.Map{
 //             "ReadCapacityUnits": 5,
