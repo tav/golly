@@ -1,5 +1,7 @@
 # specific files/directories
 
+cmd/dynamodb-marshal/dynamodb-marshal
+
 # hidden files/directories
 
 .bzr
