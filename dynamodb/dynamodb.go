@@ -290,7 +290,8 @@ type Table struct {
 	name   string
 }
 
-func (t *Table) Get(key Key) error {
+// Get fetches and populates the item.
+func (t *Table) Get(item interface{}, consistent bool) error {
 	// return c.makeRequest("GetItem", payload)
 	return nil
 }
@@ -363,6 +364,59 @@ func (c *Client) Table(name string) *Table {
 		client: c,
 		name:   name,
 	}
+}
+
+func (c *Client) CreateTable(name string, readCapacity, writeCapacity int) (*TableDescription, error) {
+}
+
+func (c *Client) DeleteTable(name string) (*TableDescription, error) {
+	d := &TableDescription{}
+	Map{"TableDescription": d}
+	return d, nil
+}
+
+func (c *Client) DescribeTable(name string) (*TableDescription, error) {
+	d := &TableDescription{}
+	Map{"Table": d}
+	return d, nil
+}
+
+func (c *Client) ListTables(limit int, from string) (*TableDescription, error) {
+
+type TableDescription struct {
+	AttributeDefinitions []struct {
+		AttributeName string
+		AttributeType string
+	}
+	CreationDateTime int
+	ItemCount        int
+	KeySchema        []struct {
+		AttributeName string
+		KeyType       string
+	}
+	LocalSecondaryIndexes []struct {
+		IndexName      string
+		IndexSizeBytes int
+		ItemCount      int
+		KeySchema      []struct {
+			AttributeName string
+			KeyType       string
+		}
+		Projection struct {
+			NonKeyAttributes []string
+			ProjectionType   string
+		}
+	}
+	ProvisionedThroughput struct {
+		LastDecreaseDateTime   int
+		LastIncreaseDateTime   int
+		NumberOfDecreasesToday int
+		ReadCapacityUnits      int
+		WriteCapacityUnits     int
+	}
+	TableName      string
+	TableSizeBytes int
+	TableStatus    string
 }
 
 // TODO(tav): Minimise string allocation by writing to a
