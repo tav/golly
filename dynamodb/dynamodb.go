@@ -366,22 +366,23 @@ func (c *Client) Table(name string) *Table {
 	}
 }
 
-func (c *Client) CreateTable(name string, readCapacity, writeCapacity int) (*TableDescription, error) {
+func (c *Client) CreateTable(name string, itemSchema interface{}, readCapacity, writeCapacity int) error {
 }
 
-func (c *Client) DeleteTable(name string) (*TableDescription, error) {
+func (c *Client) DeleteTable(name string) error {
 	d := &TableDescription{}
 	Map{"TableDescription": d}
 	return d, nil
 }
 
-func (c *Client) DescribeTable(name string) (*TableDescription, error) {
+func (c *Client) DescribeTable(name string) (table *TableDescription, err error) {
 	d := &TableDescription{}
 	Map{"Table": d}
 	return d, nil
 }
 
-func (c *Client) ListTables(limit int, from string) (*TableDescription, error) {
+func (c *Client) ListTables(cursor string) (tables []string, nextCursor string, err error) {
+}
 
 type TableDescription struct {
 	AttributeDefinitions []struct {
