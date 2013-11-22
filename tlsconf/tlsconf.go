@@ -58,7 +58,7 @@ func Load(certpath string) (*tls.Config, error) {
 	}
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(data)
-	config = &tls.Config{
+	config := &tls.Config{
 		Rand:    rand.Reader,
 		Time:    time.Now,
 		RootCAs: roots,
