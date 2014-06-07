@@ -661,29 +661,29 @@ func SubCommands(name, version string, commands map[string]func([]string, string
 		}
 	}
 
-	var suffix string
+	var prefix string
 
 	additionalItems := len(additional)
 	if additionalItems == 0 {
-		suffix = ""
+		prefix = ""
 	} else if additionalItems == 1 {
-		mainUsage = additional[0] + "\n"
-		suffix = ""
+		prefix = additional[0] + "\n\n"
 	} else {
 		mainUsage = additional[0] + "\n"
-		suffix = "\n" + additional[1]
+		prefix = additional[1] + "\n\n"
 	}
 
-	mainUsage += fmt.Sprintf("Usage: %s <command> [options]\n\nCommands:\n\n", name)
+	mainUsage += fmt.Sprintf("Usage: %s COMMAND [OPTIONS]\n\n%sCommands:\n\n", name, prefix)
 	usageLine := fmt.Sprintf("    %%-%ds %%s\n", padding)
 
 	for _, key := range usageKeys {
 		mainUsage += fmt.Sprintf(usageLine, key, commandsUsage[key])
 	}
 
-	mainUsage += suffix
 	mainUsage += fmt.Sprintf(
-		"\nSee `%s help <command>` for more info on a specific command.\n", name)
+		`
+Run "%s help <command>" for more info on a specific command.
+`, name)
 
 	complete, words, compWord, prefix := getCompletionData()
 	baseLength := len(strings.Split(name, " "))
