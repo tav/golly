@@ -42,12 +42,17 @@ func exit(message string, v ...interface{}) {
 
 type Parser struct {
 	Completer      Completer
+	HelpInfo       string
 	ParseHelp      bool
 	ParseVersion   bool
+	HideHelpOpt    bool
+	HideVersionOpt bool
 	Usage          string
 	Version        string
+	VersionInfo    string
 	nextCompleter  Completer
 	nextDest       string
+	nextHidden     bool
 	nextRequired   bool
 	options        []*option
 	config2options map[string]*option
@@ -66,6 +71,7 @@ type option struct {
 	dest           string
 	completer      Completer
 	configflag     string
+	hidden         bool
 	intValue       *int
 	listValue      *[]string
 	longflag       string
@@ -147,6 +153,9 @@ func (op *Parser) newOpt(flags []string, descr string, displayDest bool) *option
 			opt.requiredConfig = true
 		}
 	}
+	if op.nextHidden {
+		opt.hidden = true
+	}
 	if displayDest {
 		if op.nextDest != "" {
 			opt.dest = op.nextDest
@@ -161,6 +170,7 @@ func (op *Parser) newOpt(flags []string, descr string, displayDest bool) *option
 	op.options = append(op.options, opt)
 	op.nextCompleter = nil
 	op.nextDest = ""
+	op.nextHidden = false
 	op.nextRequired = false
 	return opt
 }
@@ -209,6 +219,11 @@ func (op *Parser) BoolConfig(key string, descr string) *bool {
 	return &defaultValue
 }
 
+func (op *Parser) Hidden() *Parser {
+	op.nextHidden = true
+	return op
+}
+
 // Required indicates that the option parser should raise an
 // error if the next defined option is not specified.
 func (op *Parser) Required() *Parser {
@@ -235,11 +250,27 @@ func (op *Parser) As(destination string) *Parser {
 func (op *Parser) Parse(args []string) (remainder []string) {
 
 	if op.ParseHelp && !op.helpAdded {
-		op.Bool([]string{"-h", "--help"}, "show this help and exit")
+		helpInfo := op.HelpInfo
+		if helpInfo == "" {
+			helpInfo = "show this help and exit"
+		}
+		if op.HideHelpOpt {
+			op.Hidden().Bool([]string{"-h", "--help"}, helpInfo)
+		} else {
+			op.Bool([]string{"-h", "--help"}, helpInfo)
+		}
 		op.helpAdded = true
 	}
 	if op.ParseVersion && !op.versionAdded {
-		op.Bool([]string{"-v", "--version"}, "show the version and exit")
+		versionInfo := op.VersionInfo
+		if versionInfo == "" {
+			versionInfo = "show the version and exit"
+		}
+		if op.HideVersionOpt {
+			op.Hidden().Bool([]string{"-v", "--version"}, versionInfo)
+		} else {
+			op.Bool([]string{"-v", "--version"}, versionInfo)
+		}
 		op.versionAdded = true
 	}
 
@@ -452,11 +483,13 @@ func (op *Parser) PrintUsage() {
 			fmt.Printf("%v", opt)
 		}
 	}
-	if len(op.options) > 0 {
-		fmt.Print("\nOptions:\n")
-	}
+	printHeader := true
 	for _, opt := range op.options {
-		if opt.configflag == "" {
+		if opt.configflag == "" && !opt.hidden {
+			if printHeader {
+				fmt.Print("\nOptions:\n")
+				printHeader = false
+			}
 			fmt.Printf("%v", opt)
 		}
 	}
