@@ -16,14 +16,14 @@ import (
 )
 
 type Completer interface {
-	Complete() []string
+	Complete(...string) []string
 }
 
 type listCompleter struct {
 	items []string
 }
 
-func (completer *listCompleter) Complete() []string {
+func (completer *listCompleter) Complete(...string) []string {
 	return completer.items
 }
 
@@ -61,6 +61,8 @@ type Parser struct {
 	shortflags     []string
 	long2options   map[string]*option
 	longflags      []string
+	configPadding  int
+	optPadding     int
 	helpAdded      bool
 	versionAdded   bool
 }
@@ -83,11 +85,11 @@ type option struct {
 	valueType      string
 }
 
-func (opt *option) String() (output string) {
-	output = "  "
+func (opt *option) FlagString() string {
+	output := "  "
 	if opt.configflag != "" {
 		output += opt.configflag
-		output += ": "
+		output += ":"
 	} else {
 		if opt.shortflag != "" {
 			output += opt.shortflag
@@ -102,18 +104,12 @@ func (opt *option) String() (output string) {
 			output += " " + opt.dest
 		}
 	}
-	length := len(output)
-	if length >= 21 {
-		output += "\n                    "
-	} else {
-		padding := make([]byte, 20-length)
-		for i, _ := range padding {
-			padding[i] = 32
-		}
-		output += string(padding)
-	}
-	output += opt.descr
-	output += "\n"
+	return output
+}
+
+func (opt *option) Print(format string) (output string) {
+	flagString := opt.FlagString()
+	fmt.Printf(format, flagString, opt.descr)
 	return
 }
 
@@ -128,7 +124,7 @@ func (op *Parser) computeFlags(flags []string, opt *option) (configflag, shortfl
 			op.short2options[shortflag] = opt
 			op.shortflags = append(op.shortflags, shortflag)
 		} else if strings.HasSuffix(flag, ":") {
-			configflag = flag[0 : len(flag)-1]
+			configflag = flag[:len(flag)-1]
 			op.config2options[configflag] = opt
 			op.configflags = append(op.configflags, configflag)
 		} else {
@@ -172,6 +168,18 @@ func (op *Parser) newOpt(flags []string, descr string, displayDest bool) *option
 	op.nextDest = ""
 	op.nextHidden = false
 	op.nextRequired = false
+	if opt.configflag != "" {
+		width := len(opt.FlagString())
+		if width > op.configPadding {
+			op.configPadding = width
+		}
+	} else if !opt.hidden {
+		width := len(opt.FlagString())
+		if width > op.optPadding {
+			op.optPadding = width
+		}
+	}
+
 	return opt
 }
 
@@ -323,7 +331,13 @@ func (op *Parser) Parse(args []string) (remainder []string) {
 		completions := make([]string, 0)
 
 		if op.Completer != nil {
-			for _, item := range op.Completer.Complete() {
+			cmpArgs := []string{}
+			for _, arg := range words {
+				if !(strings.HasPrefix(arg, "--") || strings.HasPrefix(arg, "-")) {
+					cmpArgs = append(cmpArgs, arg)
+				}
+			}
+			for _, item := range op.Completer.Complete(cmpArgs...) {
 				if strings.HasPrefix(item, prefix) {
 					completions = append(completions, item)
 				}
@@ -478,11 +492,13 @@ func (op *Parser) PrintUsage() {
 	if len(op.configflags) > 0 {
 		fmt.Print("\nConfig File Options:\n")
 	}
+	configFormat := fmt.Sprintf("%%-%ds%%s\n", op.configPadding+4)
 	for _, opt := range op.options {
 		if opt.configflag != "" {
-			fmt.Printf("%v", opt)
+			opt.Print(configFormat)
 		}
 	}
+	optFormat := fmt.Sprintf("%%-%ds%%s\n", op.optPadding+4)
 	printHeader := true
 	for _, opt := range op.options {
 		if opt.configflag == "" && !opt.hidden {
@@ -490,7 +506,7 @@ func (op *Parser) PrintUsage() {
 				fmt.Print("\nOptions:\n")
 				printHeader = false
 			}
-			fmt.Printf("%v", opt)
+			opt.Print(optFormat)
 		}
 	}
 }
@@ -528,6 +544,8 @@ func New(usage string, version ...string) *Parser {
 	} else {
 		op.ParseVersion = false
 	}
+	op.configPadding = 20
+	op.optPadding = 20
 	return op
 }
 
@@ -695,15 +713,17 @@ func SubCommands(name, version string, commands map[string]func([]string, string
 	}
 
 	var prefix string
+	var suffix string
 
-	additionalItems := len(additional)
-	if additionalItems == 0 {
-		prefix = ""
-	} else if additionalItems == 1 {
+	lenExtra := len(additional)
+	if lenExtra >= 1 {
 		prefix = additional[0] + "\n\n"
-	} else {
-		mainUsage = additional[0] + "\n"
-		prefix = additional[1] + "\n\n"
+	}
+	if lenExtra >= 2 {
+		suffix = additional[1] + "\n"
+	}
+	if lenExtra >= 3 {
+		mainUsage = additional[2] + "\n"
 	}
 
 	mainUsage += fmt.Sprintf("Usage: %s COMMAND [OPTIONS]\n\n%sCommands:\n\n", name, prefix)
@@ -716,7 +736,7 @@ func SubCommands(name, version string, commands map[string]func([]string, string
 	mainUsage += fmt.Sprintf(
 		`
 Run "%s help <command>" for more info on a specific command.
-`, name)
+%s`, name, suffix)
 
 	complete, words, compWord, prefix := getCompletionData()
 	baseLength := len(strings.Split(name, " "))
