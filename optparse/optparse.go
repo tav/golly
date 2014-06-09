@@ -7,6 +7,7 @@ package optparse
 
 import (
 	"fmt"
+	"github.com/flynn/go-shlex"
 	"github.com/tav/golly/structure"
 	"os"
 	"os/exec"
@@ -25,12 +26,12 @@ const (
 )
 
 type Completer interface {
-	Complete(...string) []string
+	Complete([]string) []string
 }
 
 type ListCompleter []string
 
-func (l ListCompleter) Complete(...string) []string {
+func (l ListCompleter) Complete([]string) []string {
 	return l
 }
 
@@ -53,6 +54,9 @@ type Parser struct {
 	ParseVersion          bool
 	Usage                 string
 	VersionOptDescription string
+	haltFlagParsing       bool
+	haltFlagParsingN      int
+	haltFlagParsingString string
 	helpAdded             bool
 	long2options          map[string]*option
 	longFlags             []string
@@ -232,6 +236,19 @@ func (p *Parser) Label(label string) *Parser {
 	return p
 }
 
+func (p *Parser) HaltFlagParsing(v interface{}) *Parser {
+	if n, ok := v.(int); ok && n > 0 {
+		p.haltFlagParsing = true
+		p.haltFlagParsingN = n
+	} else if s, ok := v.(string); ok && s != "" {
+		p.haltFlagParsing = true
+		p.haltFlagParsingString = s
+	} else {
+		exit("optparse error: expected non-empty string or int value for HaltFlagParsing()")
+	}
+	return p
+}
+
 // Parse will parse the given args slice and try and define
 // the defined options.
 func (p *Parser) Parse(args []string) (remainder []string) {
@@ -266,37 +283,78 @@ func (p *Parser) Parse(args []string) (remainder []string) {
 	// Command-line auto-completion support.
 	if complete {
 
+		argWords := []string{}
+		skipNext := false
+		for _, word := range words {
+			if p.haltFlagParsing {
+				if p.haltFlagParsingString != "" {
+					if word == p.haltFlagParsingString {
+						os.Exit(1)
+					}
+				} else {
+					if len(argWords) > p.haltFlagParsingN {
+						os.Exit(1)
+					}
+				}
+			}
+			if skipNext {
+				skipNext = false
+				continue
+			}
+			if word == "--" || word == "-" {
+				argWords = append(argWords, word)
+			} else if strings.HasPrefix(word, "--") {
+				op, ok := p.long2options[word]
+				if ok && op.label != "" {
+					skipNext = true
+				}
+			} else if strings.HasPrefix(word, "-") {
+				op, ok := p.short2options[word]
+				if ok && op.label != "" {
+					skipNext = true
+				}
+			} else {
+				argWords = append(argWords, word)
+			}
+		}
+
+		fx, _ := os.Create("foo.txt")
+		fmt.Fprintf(fx, "%#v", argWords)
+		fx.Close()
+
 		// Pass to the shell completion if the previous word was a flag
 		// expecting some parameter.
 		if (compWord - 1) > 0 {
 			var completer Completer
 			prev := words[compWord-1]
-			if strings.HasPrefix(prev, "--") {
-				op, ok := p.long2options[prev]
-				if ok {
-					if op.label != "" {
-						if op.completer == nil {
-							os.Exit(1)
-						} else {
-							completer = op.completer
+			if prev != "--" && prev != "-" {
+				if strings.HasPrefix(prev, "--") {
+					op, ok := p.long2options[prev]
+					if ok {
+						if op.label != "" {
+							if op.completer == nil {
+								os.Exit(1)
+							} else {
+								completer = op.completer
+							}
 						}
 					}
-				}
-			} else if strings.HasPrefix(prev, "-") {
-				op, ok := p.short2options[prev]
-				if ok {
-					if op.label != "" {
-						if op.completer == nil {
-							os.Exit(1)
-						} else {
-							completer = op.completer
+				} else if strings.HasPrefix(prev, "-") {
+					op, ok := p.short2options[prev]
+					if ok {
+						if op.label != "" {
+							if op.completer == nil {
+								os.Exit(1)
+							} else {
+								completer = op.completer
+							}
 						}
 					}
 				}
 			}
 			if completer != nil {
 				completions := make([]string, 0)
-				for _, item := range completer.Complete() {
+				for _, item := range completer.Complete(argWords) {
 					if strings.HasPrefix(item, prefix) {
 						completions = append(completions, item)
 					}
@@ -309,13 +367,7 @@ func (p *Parser) Parse(args []string) (remainder []string) {
 		completions := make([]string, 0)
 
 		if p.Completer != nil {
-			cmpArgs := []string{}
-			for _, arg := range words {
-				if !(strings.HasPrefix(arg, "--") || strings.HasPrefix(arg, "-")) {
-					cmpArgs = append(cmpArgs, arg)
-				}
-			}
-			for _, item := range p.Completer.Complete(cmpArgs...) {
+			for _, item := range p.Completer.Complete(argWords) {
 				if strings.HasPrefix(item, prefix) {
 					completions = append(completions, item)
 				}
@@ -477,28 +529,27 @@ func New(usage string) *Parser {
 	return p
 }
 
+var lastDebug = 'a'
+
+func debug(message string, v ...interface{}) {
+	f, _ := os.Create("debug." + string(lastDebug) + ".txt")
+	fmt.Fprintf(f, message, v...)
+	f.Close()
+	lastDebug += 1
+}
+
 func getCompletionData() (complete bool, words []string, compWord int, prefix string) {
+
+	var err error
 
 	autocomplete := os.Getenv("OPTPARSE_AUTO_COMPLETE")
 	if autocomplete != "" {
 
 		complete = true
-		compWords := os.Getenv("COMP_WORDS")
-		if compWords == "" {
-			// zsh's bashcompinit does not pass COMP_WORDS, replace with
-			// COMP_LINE for now...
-			compWords = os.Getenv("COMP_LINE")
-			if compWords == "" {
-				os.Exit(1)
-			}
-		}
 
-		words = strings.Split(compWords, " ")
-		compLine := os.Getenv("COMP_LINE")
-
-		compPoint, err := strconv.Atoi(os.Getenv("COMP_POINT"))
+		words, err = shlex.Split(os.Getenv("COMP_LINE"))
 		if err != nil {
-			os.Exit(1)
+			exit("optparse error: could not shlex autocompletion words: %s", err)
 		}
 
 		compWord, err = strconv.Atoi(os.Getenv("COMP_CWORD"))
@@ -511,10 +562,6 @@ func getCompletionData() (complete bool, words []string, compWord int, prefix st
 				prefix = words[compWord]
 			}
 		}
-
-		// At some point in the future, make use of these variables.
-		_ = compLine
-		_ = compPoint
 
 	}
 
