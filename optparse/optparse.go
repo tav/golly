@@ -1,4 +1,4 @@
-// Public Domain (-) 2010-2013 The Golly Authors.
+// Public Domain (-) 2010-2014 The Golly Authors.
 // See the Golly UNLICENSE file for details.
 
 // Package optparse provides utility functions for the parsing and
@@ -8,27 +8,30 @@ package optparse
 import (
 	"fmt"
 	"github.com/tav/golly/structure"
-	"github.com/tav/golly/yaml"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 )
 
+type valueType int
+
+const (
+	boolValue valueType = iota
+	intValue
+	intSliceValue
+	stringValue
+	stringSliceValue
+)
+
 type Completer interface {
 	Complete(...string) []string
 }
 
-type listCompleter struct {
-	items []string
-}
+type ListCompleter []string
 
-func (completer *listCompleter) Complete(...string) []string {
-	return completer.items
-}
-
-func ListCompleter(items ...string) Completer {
-	return &listCompleter{items}
+func (l ListCompleter) Complete(...string) []string {
+	return l
 }
 
 func exit(message string, v ...interface{}) {
@@ -41,245 +44,220 @@ func exit(message string, v ...interface{}) {
 }
 
 type Parser struct {
-	Completer      Completer
-	HelpInfo       string
-	ParseHelp      bool
-	ParseVersion   bool
-	HideHelpOpt    bool
-	HideVersionOpt bool
-	Usage          string
-	Version        string
-	VersionInfo    string
-	nextCompleter  Completer
-	nextDest       string
-	nextHidden     bool
-	nextRequired   bool
-	options        []*option
-	config2options map[string]*option
-	configflags    []string
-	short2options  map[string]*option
-	shortflags     []string
-	long2options   map[string]*option
-	longflags      []string
-	configPadding  int
-	optPadding     int
-	helpAdded      bool
-	versionAdded   bool
+	Completer             Completer
+	HelpOptDescription    string
+	HideHelpOpt           bool
+	HideVersionOpt        bool
+	OptPadding            int
+	ParseHelp             bool
+	ParseVersion          bool
+	Usage                 string
+	VersionOptDescription string
+	helpAdded             bool
+	long2options          map[string]*option
+	longFlags             []string
+	nextCompleter         Completer
+	nextFlags             []string
+	nextHidden            bool
+	nextLabel             string
+	nextRequired          bool
+	options               []*option
+	short2options         map[string]*option
+	shortFlags            []string
+	version               func() string
+	versionAdded          bool
 }
 
 type option struct {
-	boolValue      *bool
-	defined        bool
-	dest           string
-	completer      Completer
-	configflag     string
-	hidden         bool
-	intValue       *int
-	listValue      *[]string
-	longflag       string
-	requiredConfig bool
-	requiredFlag   bool
-	shortflag      string
-	stringValue    *string
-	descr          string
-	valueType      string
+	completer   Completer
+	defined     bool
+	description string
+	hidden      bool
+	label       string
+	longFlag    string
+	required    bool
+	shortFlag   string
+	value       interface{}
+	valueType   valueType
 }
 
-func (opt *option) FlagString() string {
+func (op *option) FlagString() string {
 	output := "  "
-	if opt.configflag != "" {
-		output += opt.configflag
-		output += ":"
-	} else {
-		if opt.shortflag != "" {
-			output += opt.shortflag
-			if opt.longflag != "" {
-				output += ", "
-			}
+	if op.shortFlag != "" {
+		output += op.shortFlag
+		if op.longFlag != "" {
+			output += ", "
 		}
-		if opt.longflag != "" {
-			output += opt.longflag
-		}
-		if opt.dest != "" {
-			output += " " + opt.dest
-		}
+	}
+	if op.longFlag != "" {
+		output += op.longFlag
+	}
+	if op.label != "" {
+		output += " " + op.label
 	}
 	return output
 }
 
-func (opt *option) Print(format string) (output string) {
-	flagString := opt.FlagString()
-	fmt.Printf(format, flagString, opt.descr)
-	return
+func (op *option) Print(format string) {
+	flagString := op.FlagString()
+	fmt.Printf(format, flagString, op.description)
 }
 
-func (op *Parser) computeFlags(flags []string, opt *option) (configflag, shortflag, longflag string) {
-	for _, flag := range flags {
+func (p *Parser) newOpt(description string, showLabel bool) *option {
+	op := &option{}
+	op.completer = p.nextCompleter
+	op.description = description
+	op.hidden = p.nextHidden
+	op.required = p.nextRequired
+	for _, flag := range p.nextFlags {
 		if strings.HasPrefix(flag, "--") {
-			longflag = flag
-			op.long2options[longflag] = opt
-			op.longflags = append(op.longflags, longflag)
+			op.longFlag = flag
+			p.long2options[flag] = op
+			p.longFlags = append(p.longFlags, flag)
 		} else if strings.HasPrefix(flag, "-") {
-			shortflag = flag
-			op.short2options[shortflag] = opt
-			op.shortflags = append(op.shortflags, shortflag)
-		} else if strings.HasSuffix(flag, ":") {
-			configflag = flag[:len(flag)-1]
-			op.config2options[configflag] = opt
-			op.configflags = append(op.configflags, configflag)
-		} else {
-			longflag = flag
-			op.long2options[longflag] = opt
-			op.longflags = append(op.longflags, longflag)
+			op.shortFlag = flag
+			p.short2options[flag] = op
+			p.shortFlags = append(p.shortFlags, flag)
 		}
 	}
-	return
+	if op.shortFlag == "" && op.longFlag == "" {
+		exit("optparse error: no -short or --long flags found for option with description: %s\n", description)
+	}
+	if !op.hidden {
+		if showLabel {
+			if p.nextLabel != "" {
+				op.label = p.nextLabel
+			} else {
+				if op.longFlag != "" {
+					op.label = strings.ToUpper(strings.TrimLeft(op.longFlag, "-"))
+				} else {
+					op.label = strings.ToUpper(strings.TrimLeft(op.shortFlag, "-"))
+				}
+			}
+		}
+		width := len(op.FlagString())
+		if width > p.OptPadding {
+			p.OptPadding = width
+		}
+	}
+	p.options = append(p.options, op)
+	p.nextCompleter = nil
+	p.nextFlags = nil
+	p.nextHidden = false
+	p.nextLabel = ""
+	p.nextRequired = false
+	return op
 }
 
-func (op *Parser) newOpt(flags []string, descr string, displayDest bool) *option {
-	opt := &option{}
-	opt.descr = descr
-	opt.configflag, opt.shortflag, opt.longflag = op.computeFlags(flags, opt)
-	opt.completer = op.nextCompleter
-	required := op.nextRequired
-	if required {
-		if opt.configflag == "" {
-			opt.requiredFlag = true
-		} else {
-			opt.requiredConfig = true
-		}
-	}
-	if op.nextHidden {
-		opt.hidden = true
-	}
-	if displayDest {
-		if op.nextDest != "" {
-			opt.dest = op.nextDest
-		} else {
-			if opt.longflag != "" {
-				opt.dest = strings.ToUpper(strings.TrimLeft(opt.longflag, "-"))
-			} else {
-				opt.dest = strings.ToUpper(strings.TrimLeft(opt.shortflag, "-"))
+// Int defines a new option with the given description and
+// optional default value.
+func (p *Parser) Int(description string, defaultValue ...int) *int {
+	v := 0
+	if len(defaultValue) > 0 {
+		v = defaultValue[0]
+	} else if strings.HasSuffix(description, "]") {
+		if idx := strings.LastIndex(description, "["); idx != 1 {
+			var err error
+			v, err = strconv.Atoi(description[idx+1 : len(description)-1])
+			if err != nil {
+				exit("optparse error: could not parse default value from: %s\n", description)
 			}
 		}
 	}
-	op.options = append(op.options, opt)
-	op.nextCompleter = nil
-	op.nextDest = ""
-	op.nextHidden = false
-	op.nextRequired = false
-	if opt.configflag != "" {
-		width := len(opt.FlagString())
-		if width > op.configPadding {
-			op.configPadding = width
-		}
-	} else if !opt.hidden {
-		width := len(opt.FlagString())
-		if width > op.optPadding {
-			op.optPadding = width
+	op := p.newOpt(description, true)
+	op.valueType = intValue
+	op.value = &v
+	return &v
+}
+
+// String defines a new option with the given description
+// and optional default value.
+func (p *Parser) String(description string, defaultValue ...string) *string {
+	v := ""
+	if len(defaultValue) > 0 {
+		v = defaultValue[0]
+	} else if strings.HasSuffix(description, "]") {
+		if idx := strings.LastIndex(description, "["); idx != 1 {
+			v = description[idx+1 : len(description)-1]
 		}
 	}
-
-	return opt
+	op := p.newOpt(description, true)
+	op.valueType = stringValue
+	op.value = &v
+	return &v
 }
 
-func (op *Parser) Int(flags []string, defaultValue int, descr string) *int {
-	opt := op.newOpt(flags, descr, true)
-	opt.valueType = "int"
-	opt.intValue = &defaultValue
-	return &defaultValue
+// Bool defines a new option with the given description and
+// optional default value.
+func (p *Parser) Bool(description string) *bool {
+	v := false
+	op := p.newOpt(description, false)
+	op.valueType = boolValue
+	op.value = &v
+	return &v
 }
 
-func (op *Parser) String(flags []string, defaultValue string, descr string) *string {
-	opt := op.newOpt(flags, descr, true)
-	opt.valueType = "string"
-	opt.stringValue = &defaultValue
-	return &defaultValue
+// Flags specifies the -short and/or --long flags to use for
+// the next defined option.
+func (p *Parser) Flags(flags ...string) *Parser {
+	p.nextFlags = flags
+	return p
 }
 
-func (op *Parser) Bool(flags []string, descr string) *bool {
-	defaultValue := false
-	opt := op.newOpt(flags, descr, false)
-	opt.valueType = "bool"
-	opt.boolValue = &defaultValue
-	return &defaultValue
-}
-
-func (op *Parser) IntConfig(key string, defaultValue int, descr string) *int {
-	opt := op.newOpt([]string{key + ":", "--" + key}, descr, false)
-	opt.valueType = "int"
-	opt.intValue = &defaultValue
-	return &defaultValue
-}
-
-func (op *Parser) StringConfig(key string, defaultValue string, descr string) *string {
-	opt := op.newOpt([]string{key + ":", "--" + key}, descr, false)
-	opt.valueType = "string"
-	opt.stringValue = &defaultValue
-	return &defaultValue
-}
-
-func (op *Parser) BoolConfig(key string, descr string) *bool {
-	defaultValue := false
-	opt := op.newOpt([]string{key + ":", "--" + key}, descr, false)
-	opt.valueType = "bool"
-	opt.boolValue = &defaultValue
-	return &defaultValue
-}
-
-func (op *Parser) Hidden() *Parser {
-	op.nextHidden = true
-	return op
+// Hidden will suppress the next defined option from being
+// displayed in the auto-generated usage output.
+func (p *Parser) Hidden() *Parser {
+	p.nextHidden = true
+	return p
 }
 
 // Required indicates that the option parser should raise an
 // error if the next defined option is not specified.
-func (op *Parser) Required() *Parser {
-	op.nextRequired = true
-	return op
+func (p *Parser) Required() *Parser {
+	p.nextRequired = true
+	return p
 }
 
 // WithOptCompleter will use the provided Completer to
 // autocomplete the next defined option.
-func (op *Parser) WithOptCompleter(c Completer) *Parser {
-	op.nextCompleter = c
-	return op
+func (p *Parser) WithOptCompleter(c Completer) *Parser {
+	p.nextCompleter = c
+	return p
 }
 
-// As will use the given destination string for the next
+// Label will use the given label string for the next
 // defined option.
-func (op *Parser) As(destination string) *Parser {
-	op.nextDest = destination
-	return op
+func (p *Parser) Label(label string) *Parser {
+	p.nextLabel = label
+	return p
 }
 
 // Parse will parse the given args slice and try and define
 // the defined options.
-func (op *Parser) Parse(args []string) (remainder []string) {
+func (p *Parser) Parse(args []string) (remainder []string) {
 
-	if op.ParseHelp && !op.helpAdded {
-		helpInfo := op.HelpInfo
-		if helpInfo == "" {
-			helpInfo = "show this help and exit"
+	if p.ParseHelp && !p.helpAdded {
+		description := p.HelpOptDescription
+		if description == "" {
+			description = "Show this help and exit"
 		}
-		if op.HideHelpOpt {
-			op.Hidden().Bool([]string{"-h", "--help"}, helpInfo)
-		} else {
-			op.Bool([]string{"-h", "--help"}, helpInfo)
+		if p.HideHelpOpt {
+			p.Hidden()
 		}
-		op.helpAdded = true
+		p.Flags("-h", "--help").Bool(description)
+		p.helpAdded = true
 	}
-	if op.ParseVersion && !op.versionAdded {
-		versionInfo := op.VersionInfo
-		if versionInfo == "" {
-			versionInfo = "show the version and exit"
+
+	if p.ParseVersion && !p.versionAdded {
+		description := p.VersionOptDescription
+		if description == "" {
+			description = "Show the version and exit"
 		}
-		if op.HideVersionOpt {
-			op.Hidden().Bool([]string{"-v", "--version"}, versionInfo)
-		} else {
-			op.Bool([]string{"-v", "--version"}, versionInfo)
+		if p.HideVersionOpt {
+			p.Hidden()
 		}
-		op.versionAdded = true
+		p.Flags("-v", "--version").Bool(description)
+		p.versionAdded = true
 	}
 
 	argLength := len(args) - 1
@@ -294,24 +272,24 @@ func (op *Parser) Parse(args []string) (remainder []string) {
 			var completer Completer
 			prev := words[compWord-1]
 			if strings.HasPrefix(prev, "--") {
-				opt, ok := op.long2options[prev]
+				op, ok := p.long2options[prev]
 				if ok {
-					if opt.dest != "" {
-						if opt.completer == nil {
+					if op.label != "" {
+						if op.completer == nil {
 							os.Exit(1)
 						} else {
-							completer = opt.completer
+							completer = op.completer
 						}
 					}
 				}
 			} else if strings.HasPrefix(prev, "-") {
-				opt, ok := op.short2options[prev]
+				op, ok := p.short2options[prev]
 				if ok {
-					if opt.dest != "" {
-						if opt.completer == nil {
+					if op.label != "" {
+						if op.completer == nil {
 							os.Exit(1)
 						} else {
-							completer = opt.completer
+							completer = op.completer
 						}
 					}
 				}
@@ -330,27 +308,27 @@ func (op *Parser) Parse(args []string) (remainder []string) {
 
 		completions := make([]string, 0)
 
-		if op.Completer != nil {
+		if p.Completer != nil {
 			cmpArgs := []string{}
 			for _, arg := range words {
 				if !(strings.HasPrefix(arg, "--") || strings.HasPrefix(arg, "-")) {
 					cmpArgs = append(cmpArgs, arg)
 				}
 			}
-			for _, item := range op.Completer.Complete(cmpArgs...) {
+			for _, item := range p.Completer.Complete(cmpArgs...) {
 				if strings.HasPrefix(item, prefix) {
 					completions = append(completions, item)
 				}
 			}
 		}
 
-		for flag, _ := range op.long2options {
+		for flag, _ := range p.long2options {
 			if strings.HasPrefix(flag, prefix) {
 				completions = append(completions, flag)
 			}
 		}
 
-		for flag, _ := range op.short2options {
+		for flag, _ := range p.short2options {
 			if strings.HasPrefix(flag, prefix) {
 				completions = append(completions, flag)
 			}
@@ -365,7 +343,7 @@ func (op *Parser) Parse(args []string) (remainder []string) {
 		return
 	}
 
-	var opt *option
+	var op *option
 	var ok bool
 
 	idx := 1
@@ -374,12 +352,12 @@ func (op *Parser) Parse(args []string) (remainder []string) {
 		arg := args[idx]
 		noOpt := true
 		if strings.HasPrefix(arg, "--") {
-			opt, ok = op.long2options[arg]
+			op, ok = p.long2options[arg]
 			if ok {
 				noOpt = false
 			}
 		} else if strings.HasPrefix(arg, "-") {
-			opt, ok = op.short2options[arg]
+			op, ok = p.short2options[arg]
 			if ok {
 				noOpt = false
 			}
@@ -395,30 +373,32 @@ func (op *Parser) Parse(args []string) (remainder []string) {
 		if noOpt {
 			exit("%s: error: no such option: %s\n", args[0], arg)
 		}
-		if opt.dest != "" {
+		if op.label != "" {
 			if idx == argLength {
 				exit("%s: error: %s option requires an argument\n", args[0], arg)
 			}
 		}
-		if opt.valueType == "bool" {
-			if opt.longflag == "--help" && op.ParseHelp {
-				op.PrintUsage()
+		if op.valueType == boolValue {
+			if op.longFlag == "--help" && p.ParseHelp {
+				p.PrintUsage()
 				os.Exit(1)
-			} else if opt.longflag == "--version" && op.ParseVersion {
-				fmt.Printf("%s\n", op.Version)
+			} else if op.longFlag == "--version" && p.ParseVersion {
+				fmt.Printf("%s\n", p.version)
 				os.Exit(0)
 			}
-			*opt.boolValue = true
-			opt.defined = true
+			v := op.value.(*bool)
+			*v = true
+			op.defined = true
 			idx += 1
-		} else if opt.valueType == "string" {
+		} else if op.valueType == stringValue {
 			if idx == argLength {
 				exit("%s: error: no value specified for %s\n", args[0], arg)
 			}
-			*opt.stringValue = args[idx+1]
-			opt.defined = true
+			v := op.value.(*string)
+			*v = args[idx+1]
+			op.defined = true
 			idx += 2
-		} else if opt.valueType == "int" {
+		} else if op.valueType == intValue {
 			if idx == argLength {
 				exit("%s: error: no value specified for %s\n", args[0], arg)
 			}
@@ -426,8 +406,9 @@ func (op *Parser) Parse(args []string) (remainder []string) {
 			if err != nil {
 				exit("%s: error: couldn't convert %s value '%s' to an integer\n", args[0], arg, args[idx+1])
 			}
-			*opt.intValue = intValue
-			opt.defined = true
+			v := op.value.(*int)
+			*v = intValue
+			op.defined = true
 			idx += 2
 		}
 		if idx > argLength {
@@ -435,9 +416,9 @@ func (op *Parser) Parse(args []string) (remainder []string) {
 		}
 	}
 
-	for _, opt := range op.options {
-		if opt.requiredFlag && !opt.defined {
-			exit("%s: error: required: %s", args[0], opt)
+	for _, op := range p.options {
+		if op.required && !op.defined {
+			exit("%s: error: required: %s", args[0], op)
 		}
 	}
 
@@ -445,108 +426,55 @@ func (op *Parser) Parse(args []string) (remainder []string) {
 
 }
 
-func (op *Parser) ParseConfig(filename string, args []string) (err error) {
-
-	data, err := yaml.ParseDictFile(filename)
-	if err != nil {
-		return err
-	}
-
-	for config, opt := range op.config2options {
-		if opt.defined {
-			continue
-		}
-		value, ok := data[config]
-		if !ok {
-			if opt.requiredConfig {
-				exit("%s: error: required: %s", args[0], opt)
-			} else {
-				continue
-			}
-		}
-		if opt.valueType == "bool" {
-			if value == "true" || value == "on" || value == "yes" {
-				*opt.boolValue = true
-			} else if value == "false" || value == "off" || value == "no" {
-				*opt.boolValue = false
-			} else {
-				exit("%s: error: invalid boolean value for %s: %q\n", args[0], config, value)
-			}
-		} else if opt.valueType == "string" {
-			*opt.stringValue = value
-		} else if opt.valueType == "int" {
-			intValue, err := strconv.Atoi(value)
-			if err != nil {
-				exit("%s: error: couldn't convert the %s value %q to an integer\n", args[0], config, value)
-			}
-			*opt.intValue = intValue
-		}
-	}
-
-	return nil
-
-}
-
-func (op *Parser) PrintUsage() {
-	fmt.Print(op.Usage)
-	if len(op.configflags) > 0 {
-		fmt.Print("\nConfig File Options:\n")
-	}
-	configFormat := fmt.Sprintf("%%-%ds%%s\n", op.configPadding+4)
-	for _, opt := range op.options {
-		if opt.configflag != "" {
-			opt.Print(configFormat)
-		}
-	}
-	optFormat := fmt.Sprintf("%%-%ds%%s\n", op.optPadding+4)
+// PrintUsage generates and prints a default help usage output.
+func (p *Parser) PrintUsage() {
+	fmt.Print(p.Usage)
+	optFormat := fmt.Sprintf("%%-%ds%%s\n", p.OptPadding+4)
 	printHeader := true
-	for _, opt := range op.options {
-		if opt.configflag == "" && !opt.hidden {
+	for _, op := range p.options {
+		if !op.hidden {
 			if printHeader {
 				fmt.Print("\nOptions:\n")
 				printHeader = false
 			}
-			opt.Print(optFormat)
+			op.Print(optFormat)
 		}
 	}
 }
 
-func (op *Parser) PrintDefaultConfigFile(name string) {
-	fmt.Printf("# %s.yaml\n\n", name)
-	for _, opt := range op.options {
-		if opt.configflag != "" {
-			fmt.Printf("%s: ", opt.configflag)
-			switch opt.valueType {
-			case "int":
-				fmt.Printf("%d\n", *opt.intValue)
-			case "bool":
-				fmt.Printf("%v\n", *opt.boolValue)
-			case "string":
-				fmt.Printf("%s\n", *opt.stringValue)
+// SetVersion lets you specify a version string or function
+// returning a string for use by the version option handler.
+func (p *Parser) SetVersion(value interface{}) *Parser {
+	var setVersion bool
+	var versionFunc func() string
+	if versionString, found := value.(string); found {
+		if len(versionString) != 0 {
+			setVersion = true
+			versionFunc = func() string {
+				return versionString
 			}
 		}
+	} else if versionFunc, found = value.(func() string); found {
+		setVersion = true
 	}
+	if !setVersion {
+		exit("optparse error: the SetVersion value needs to be a string or a function returning a string\n")
+	}
+	p.version = versionFunc
+	p.ParseVersion = true
+	return p
 }
 
-// New takes the header and version for the usage string and
-// returns a fresh option parser.
-func New(usage string, version ...string) *Parser {
-	op := &Parser{}
-	op.long2options = make(map[string]*option)
-	op.short2options = make(map[string]*option)
-	op.config2options = make(map[string]*option)
-	op.Usage = usage
-	op.ParseHelp = true
-	verSlice := []string(version)
-	if len(verSlice) > 0 {
-		op.ParseVersion = true
-		op.Version = verSlice[0]
-	} else {
-		op.ParseVersion = false
-	}
-	op.configPadding = 20
-	op.optPadding = 20
-	return op
+// New returns a fresh parser with the given usage header
+// and optional version string.
+func New(usage string) *Parser {
+	p := &Parser{}
+	p.long2options = make(map[string]*option)
+	p.short2options = make(map[string]*option)
+	p.OptPadding = 20
+	p.ParseHelp = true
+	p.Usage = usage
+	return p
 }
 
 func getCompletionData() (complete bool, words []string, compWord int, prefix string) {
@@ -595,7 +523,7 @@ func getCompletionData() (complete bool, words []string, compWord int, prefix st
 }
 
 // SubCommands provides support for git subcommands style command handling.
-func SubCommands(name, version string, commands map[string]func([]string, string), commandsUsage map[string]string, additional ...string) {
+func SubCommands(name string, version interface{}, commands map[string]func([]string, string), commandsUsage map[string]string, additional ...string) {
 
 	var commandNames, helpCommands []string
 	var complete bool
@@ -647,7 +575,7 @@ func SubCommands(name, version string, commands map[string]func([]string, string
 
 			opts := New(mainUsage)
 			opts.ParseHelp = false
-			opts.Completer = ListCompleter(helpCommands...)
+			opts.Completer = ListCompleter(helpCommands)
 			helpArgs := opts.Parse(args)
 
 			if len(helpArgs) == 0 {
@@ -675,17 +603,33 @@ func SubCommands(name, version string, commands map[string]func([]string, string
 		commands["--help"] = commands["help"]
 	}
 
-	if len(version) != 0 {
-		if _, ok := commands["version"]; !ok {
-			commands["version"] = func(args []string, usage string) {
-				opts := New(fmt.Sprintf("Usage: %s version\n\n    %s\n", name, usage))
-				opts.Parse(args)
-				fmt.Printf("%s\n", version)
-				return
+	var setVersion bool
+	var versionFunc func() string
+
+	if versionString, found := version.(string); found {
+		if len(versionString) != 0 {
+			setVersion = true
+			versionFunc = func() string {
+				return versionString
 			}
-			commands["-v"] = commands["version"]
-			commands["--version"] = commands["version"]
 		}
+	} else if versionFunc, found = version.(func() string); found {
+		setVersion = true
+	}
+
+	if _, ok := commands["version"]; !ok && setVersion {
+		commands["version"] = func(args []string, usage string) {
+			if usage == "" {
+				usage = fmt.Sprintf("  Show the %s version information.", name)
+			}
+			opts := New(fmt.Sprintf("Usage: %s version\n\n%s\n", name, usage))
+			opts.HideHelpOpt = true
+			opts.Parse(args)
+			fmt.Printf("%s\n", versionFunc())
+			return
+		}
+		commands["-v"] = commands["version"]
+		commands["--version"] = commands["version"]
 	}
 
 	commandNames = make([]string, len(commands))
