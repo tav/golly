@@ -26,12 +26,12 @@ const (
 )
 
 type Completer interface {
-	Complete([]string) []string
+	Complete([]string, int) []string
 }
 
 type ListCompleter []string
 
-func (l ListCompleter) Complete([]string) []string {
+func (l ListCompleter) Complete([]string, int) []string {
 	return l
 }
 
@@ -283,78 +283,90 @@ func (p *Parser) Parse(args []string) (remainder []string) {
 	// Command-line auto-completion support.
 	if complete {
 
+		seenLong := []string{}
+		seenShort := []string{}
+
+		subcommands, err := shlex.Split(args[0])
+		if err != nil {
+			os.Exit(1)
+		}
+
+		words = words[len(subcommands):]
+		compWord -= len(subcommands)
+
 		argWords := []string{}
 		skipNext := false
+		optCount := 0
+
 		for _, word := range words {
-			if p.haltFlagParsing {
-				if p.haltFlagParsingString != "" {
-					if word == p.haltFlagParsingString {
-						os.Exit(1)
-					}
-				} else {
-					if len(argWords) > p.haltFlagParsingN {
-						os.Exit(1)
-					}
-				}
-			}
 			if skipNext {
 				skipNext = false
+				optCount += 1
 				continue
 			}
-			if word == "--" || word == "-" {
-				argWords = append(argWords, word)
-			} else if strings.HasPrefix(word, "--") {
+			if strings.HasPrefix(word, "--") && word != "--" {
 				op, ok := p.long2options[word]
-				if ok && op.label != "" {
-					skipNext = true
+				if ok {
+					seenLong = append(seenLong, op.longFlag)
+					seenShort = append(seenShort, op.shortFlag)
+					if op.label != "" {
+						skipNext = true
+					}
 				}
-			} else if strings.HasPrefix(word, "-") {
+				optCount += 1
+			} else if strings.HasPrefix(word, "-") && !(word == "-" || word == "--") {
 				op, ok := p.short2options[word]
-				if ok && op.label != "" {
-					skipNext = true
+				if ok {
+					seenLong = append(seenLong, op.longFlag)
+					seenShort = append(seenShort, op.shortFlag)
+					if op.label != "" {
+						skipNext = true
+					}
 				}
+				optCount += 1
 			} else {
 				argWords = append(argWords, word)
+				if p.haltFlagParsing {
+					if p.haltFlagParsingString != "" {
+						if word == p.haltFlagParsingString {
+							os.Exit(1)
+						}
+					} else if (compWord - optCount) == p.haltFlagParsingN {
+						os.Exit(1)
+					}
+				}
 			}
 		}
 
-		fx, _ := os.Create("foo.txt")
-		fmt.Fprintf(fx, "%#v", argWords)
-		fx.Close()
-
 		// Pass to the shell completion if the previous word was a flag
 		// expecting some parameter.
-		if (compWord - 1) > 0 {
+		if compWord >= 1 {
 			var completer Completer
 			prev := words[compWord-1]
 			if prev != "--" && prev != "-" {
 				if strings.HasPrefix(prev, "--") {
 					op, ok := p.long2options[prev]
-					if ok {
-						if op.label != "" {
-							if op.completer == nil {
-								os.Exit(1)
-							} else {
-								completer = op.completer
-							}
+					if ok && op.label != "" {
+						if op.completer == nil {
+							os.Exit(1)
+						} else {
+							completer = op.completer
 						}
 					}
 				} else if strings.HasPrefix(prev, "-") {
 					op, ok := p.short2options[prev]
-					if ok {
-						if op.label != "" {
-							if op.completer == nil {
-								os.Exit(1)
-							} else {
-								completer = op.completer
-							}
+					if ok && op.label != "" {
+						if op.completer == nil {
+							os.Exit(1)
+						} else {
+							completer = op.completer
 						}
 					}
 				}
 			}
 			if completer != nil {
 				completions := make([]string, 0)
-				for _, item := range completer.Complete(argWords) {
+				for _, item := range completer.Complete(argWords, compWord) {
 					if strings.HasPrefix(item, prefix) {
 						completions = append(completions, item)
 					}
@@ -367,22 +379,26 @@ func (p *Parser) Parse(args []string) (remainder []string) {
 		completions := make([]string, 0)
 
 		if p.Completer != nil {
-			for _, item := range p.Completer.Complete(argWords) {
+			for _, item := range p.Completer.Complete(argWords, compWord-optCount) {
 				if strings.HasPrefix(item, prefix) {
 					completions = append(completions, item)
 				}
 			}
 		}
 
-		for flag, _ := range p.long2options {
-			if strings.HasPrefix(flag, prefix) {
-				completions = append(completions, flag)
+		for flag, op := range p.long2options {
+			if !(contains(seenLong, op.longFlag) || contains(seenShort, op.shortFlag) || op.hidden) {
+				if strings.HasPrefix(flag, prefix) {
+					completions = append(completions, flag)
+				}
 			}
 		}
 
-		for flag, _ := range p.short2options {
-			if strings.HasPrefix(flag, prefix) {
-				completions = append(completions, flag)
+		for flag, op := range p.short2options {
+			if !(contains(seenLong, op.longFlag) || contains(seenShort, op.shortFlag) || op.hidden) {
+				if strings.HasPrefix(flag, prefix) {
+					completions = append(completions, flag)
+				}
 			}
 		}
 
@@ -399,28 +415,42 @@ func (p *Parser) Parse(args []string) (remainder []string) {
 	var ok bool
 
 	idx := 1
+	addNext := false
 
 	for {
 		arg := args[idx]
 		noOpt := true
-		if strings.HasPrefix(arg, "--") {
+		if addNext {
+			remainder = append(remainder, arg)
+			if idx == argLength {
+				break
+			}
+			idx += 1
+			continue
+		} else if strings.HasPrefix(arg, "--") && arg != "--" {
 			op, ok = p.long2options[arg]
 			if ok {
 				noOpt = false
 			}
-		} else if strings.HasPrefix(arg, "-") {
+		} else if strings.HasPrefix(arg, "-") && !(arg == "-" || arg == "--") {
 			op, ok = p.short2options[arg]
 			if ok {
 				noOpt = false
 			}
 		} else {
 			remainder = append(remainder, arg)
+			if p.haltFlagParsing {
+				if arg == p.haltFlagParsingString {
+					addNext = true
+				} else if len(remainder) == p.haltFlagParsingN {
+					addNext = true
+				}
+			}
 			if idx == argLength {
 				break
-			} else {
-				idx += 1
-				continue
 			}
+			idx += 1
+			continue
 		}
 		if noOpt {
 			exit("%s: error: no such option: %s\n", args[0], arg)
@@ -529,13 +559,19 @@ func New(usage string) *Parser {
 	return p
 }
 
-var lastDebug = 'a'
+func contains(list []string, item string) bool {
+	for _, elem := range list {
+		if elem == item {
+			return true
+		}
+	}
+	return false
+}
 
-func debug(message string, v ...interface{}) {
-	f, _ := os.Create("debug." + string(lastDebug) + ".txt")
+func debug(filename, message string, v ...interface{}) {
+	f, _ := os.Create(filename + ".txt")
 	fmt.Fprintf(f, message, v...)
 	f.Close()
-	lastDebug += 1
 }
 
 func getCompletionData() (complete bool, words []string, compWord int, prefix string) {
