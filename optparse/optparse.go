@@ -663,7 +663,7 @@ func SubCommands(name string, version interface{}, commands map[string]func([]st
 
 			if len(helpArgs) == 0 {
 				fmt.Print(mainUsage)
-				return
+				os.Exit(1)
 			}
 
 			if len(helpArgs) != 1 {
@@ -680,6 +680,8 @@ func SubCommands(name string, version interface{}, commands map[string]func([]st
 				}
 				callCommand(command, []string{name, "--help"}, false)
 			}
+
+			os.Exit(1)
 
 		}
 		commands["-h"] = commands["help"]
@@ -790,7 +792,7 @@ Run "%s help <command>" for more info on a specific command.
 
 	if len(args) == 0 {
 		fmt.Print(mainUsage)
-		os.Exit(0)
+		os.Exit(1)
 	}
 
 	command := args[0]
