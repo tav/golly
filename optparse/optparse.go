@@ -29,10 +29,16 @@ type Completer interface {
 	Complete([]string, int) []string
 }
 
+type IndexedCompleter map[int][]string
+
+func (c IndexedCompleter) Complete(args []string, cword int) []string {
+	return c[cword]
+}
+
 type ListCompleter []string
 
-func (l ListCompleter) Complete([]string, int) []string {
-	return l
+func (c ListCompleter) Complete([]string, int) []string {
+	return c
 }
 
 func exit(message string, v ...interface{}) {
