@@ -1,27 +1,29 @@
 // Public Domain (-) 2010-2014 The Golly Authors.
 // See the Golly UNLICENSE file for details.
 
-// Package runtime package provides utilities to manage the runtime environment
-// for processes.
-package runtime
+// Package process provides utilities to manage the current runtime process.
+package process
 
 import (
 	"fmt"
-	"github.com/tav/golly/log"
 	"net"
 	"os"
 	"os/signal"
-	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
 )
 
-const Platform = runtime.GOOS
+const OS = runtime.GOOS
 
-var SignalHandlers = make(map[os.Signal][]func())
+var (
+	DisableDefaultExit = false
+	SignalHandlers     = make(map[os.Signal][]func())
+)
 
+// TODO(tav): It's possible for DisableDefaultExit and SignalHandlers to be
+// modified whilst this is running.
 func handleSignals() {
 	notifier := make(chan os.Signal, 100)
 	signal.Notify(notifier)
@@ -33,122 +35,97 @@ func handleSignals() {
 			for _, handler := range handlers {
 				handler()
 			}
-		} else if sig == syscall.SIGTERM || sig == os.Interrupt {
-			os.Exit(1)
+		}
+		if !DisableDefaultExit {
+			if sig == syscall.SIGTERM || sig == os.Interrupt {
+				os.Exit(1)
+			}
 		}
 	}
 }
 
 func Exit(code int) {
-	log.Wait()
 	for _, handler := range SignalHandlers[os.Interrupt] {
 		handler()
 	}
 	os.Exit(code)
 }
 
-func RegisterExitHandler(handler func()) {
+func SetExitHandler(handler func()) {
+	SignalHandlers[syscall.SIGTERM] = append(SignalHandlers[syscall.SIGTERM], handler)
 	SignalHandlers[os.Interrupt] = append(SignalHandlers[os.Interrupt], handler)
 }
 
-func RegisterSignalHandler(signal os.Signal, handler func()) {
+func SetSignalHandler(signal os.Signal, handler func()) {
 	SignalHandlers[signal] = append(SignalHandlers[signal], handler)
 }
 
-func Error(format string, v ...interface{}) {
-	log.Error(format, v...)
-	Exit(1)
-}
-
-func StandardError(err error) {
-	log.StandardError(err)
-	Exit(1)
-}
-
-func CreatePidFile(path string) {
+func CreatePidFile(path string) error {
 	pidFile, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
-		StandardError(err)
+		return err
 	}
 	fmt.Fprintf(pidFile, "%d", os.Getpid())
-	err = pidFile.Close()
-	if err != nil {
-		StandardError(err)
-	}
+	return pidFile.Close()
 }
 
-type Lock struct {
+type ProcessLock struct {
 	link     string
 	file     string
 	acquired bool
 }
 
-func GetLock(directory, name string) (lock *Lock, err error) {
-	file := path.Join(directory, fmt.Sprintf("%s-%d.lock", name, os.Getpid()))
+func Lock(directory, name string) (lock *ProcessLock, err error) {
+	file := filepath.Join(directory, fmt.Sprintf("%s-%d.lock", name, os.Getpid()))
 	lockFile, err := os.OpenFile(file, os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
 		return
 	}
 	lockFile.Close()
-	link := path.Join(directory, name+".lock")
+	link := filepath.Join(directory, name+".lock")
 	err = os.Link(file, link)
 	if err == nil {
-		lock = &Lock{
+		lock = &ProcessLock{
 			link: link,
 			file: file,
 		}
-		RegisterExitHandler(func() { lock.ReleaseLock() })
+		SetExitHandler(func() { lock.Release() })
 	} else {
 		os.Remove(file)
 	}
 	return
 }
 
-func (lock *Lock) ReleaseLock() {
+func (lock *ProcessLock) Release() {
 	os.Remove(lock.file)
 	os.Remove(lock.link)
 }
 
-// JoinPath joins the given path with the directory unless it happens to be an
-// absolute path, in which case it returns the path exactly as it was given.
-func JoinPath(directory, path string) string {
-	if filepath.IsAbs(path) {
-		return path
-	}
-	return filepath.Join(directory, filepath.Clean(path))
-}
-
-// SetMaxProcs will set Go's internal GOMAXPROCS to double the number of CPUs
-// detected.
-func SetMaxProcs() {
-	runtime.GOMAXPROCS(runtime.NumCPU() * 2)
-}
-
-// InitProcess acquires a process lock and writes the PID file for the current
+// Init acquires a process lock and writes the PID file for the current
 // process.
-func InitProcess(runPath, name string) {
+func Init(runPath, name string) error {
 
 	// Get the runtime lock to ensure we only have one process of any given name
 	// running within the same run path at any time.
-	_, err := GetLock(runPath, name)
+	_, err := Lock(runPath, name)
 	if err != nil {
-		Error("Couldn't successfully acquire a process lock:\n\n\t%s\n", err)
+		return fmt.Errorf("Couldn't successfully acquire a process lock:\n\n\t%s\n", err)
 	}
 
 	// Write the process ID into a file for use by external scripts.
-	go CreatePidFile(filepath.Join(runPath, name+".pid"))
+	return CreatePidFile(filepath.Join(runPath, name+".pid"))
 
 }
 
 // GetIP tries to determine the IP address of the current machine.
-func GetIP() string {
+func GetIP() (string, error) {
 	hostname, err := os.Hostname()
 	if err != nil {
-		StandardError(err)
+		return "", err
 	}
 	addrs, err := net.LookupHost(hostname)
 	if err != nil {
-		StandardError(err)
+		return "", err
 	}
 	var ip string
 	for _, addr := range addrs {
@@ -159,29 +136,36 @@ func GetIP() string {
 		break
 	}
 	if ip == "" {
-		Error("Couldn't determine local IP address")
+		return "", fmt.Errorf("Couldn't determine the local IP address")
 	}
-	return ip
+	return ip, nil
 }
 
 // GetAddr returns host:port and fills in empty host parameter with the current
 // machine's IP address if need be.
-func GetAddr(host string, port int) string {
+func GetAddr(host string, port int) (string, error) {
+	var err error
 	if host == "" {
-		host = GetIP()
+		host, err = GetIP()
+		if err != nil {
+			return "", err
+		}
 	}
-	return fmt.Sprintf("%s:%d", host, port)
+	return fmt.Sprintf("%s:%d", host, port), nil
 }
 
 // GetAddrListener tries to determine the IP address of the machine when the
 // host variable is empty and binds a TCP listener to the given host:port.
-func GetAddrListener(host string, port int) (string, net.Listener) {
-	addr := GetAddr(host, port)
+func GetAddrListener(host string, port int) (string, net.Listener, error) {
+	addr, err := GetAddr(host, port)
+	if err != nil {
+		return "", nil, err
+	}
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		Error("Cannot listen on %s: %v", addr, err)
+		return "", nil, fmt.Errorf("Cannot listen on %s: %v", addr, err)
 	}
-	return addr, listener
+	return addr, listener, nil
 }
 
 func init() {
