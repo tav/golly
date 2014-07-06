@@ -611,8 +611,8 @@ func getCompletionData() (complete bool, words []string, compWord int, prefix st
 
 }
 
-// SubCommands provides support for git subcommands style command handling.
-func SubCommands(name string, version interface{}, commands map[string]func([]string, string), commandsUsage map[string]string, additional ...string) {
+// Commands provides support for git subcommands style command handling.
+func Commands(name string, version interface{}, commands map[string]func([]string, string), commandsUsage map[string]string, additional ...string) {
 
 	var commandNames, helpCommands []string
 	var complete bool
