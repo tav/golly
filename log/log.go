@@ -72,7 +72,7 @@ func Error(v interface{}, data ...Data) {
 			root.log("", vdata, true)
 			return
 		}
-		msg = fmt.Sprint(msg)
+		msg = fmt.Sprint(v)
 	}
 	if len(data) > 0 {
 		root.log(msg, data[0], true)
@@ -92,7 +92,7 @@ func Fatal(v interface{}, data ...Data) {
 			root.log("", vdata, true)
 			return
 		}
-		msg = fmt.Sprint(msg)
+		msg = fmt.Sprint(v)
 	}
 	if len(data) > 0 {
 		root.log(msg, data[0], true)
@@ -114,7 +114,7 @@ func Info(v interface{}, data ...Data) {
 			root.log("", vdata, false)
 			return
 		}
-		msg = fmt.Sprint(msg)
+		msg = fmt.Sprint(v)
 	}
 	if len(data) > 0 {
 		root.log(msg, data[0], false)

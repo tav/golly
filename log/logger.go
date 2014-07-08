@@ -97,7 +97,7 @@ func (l *Logger) Error(v interface{}, data ...Data) {
 			l.log("", vdata, true)
 			return
 		}
-		msg = fmt.Sprint(msg)
+		msg = fmt.Sprint(v)
 	}
 	if len(data) > 0 {
 		l.log(msg, data[0], true)
@@ -117,7 +117,7 @@ func (l *Logger) Info(v interface{}, data ...Data) {
 			l.log("", vdata, false)
 			return
 		}
-		msg = fmt.Sprint(msg)
+		msg = fmt.Sprint(v)
 	}
 	if len(data) > 0 {
 		l.log(msg, data[0], false)
