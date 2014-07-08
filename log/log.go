@@ -5,13 +5,17 @@
 package log
 
 import (
+	"bufio"
 	"code.google.com/p/go.crypto/ssh/terminal"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/mgutz/ansi"
 	"github.com/tav/golly/process"
 	"io"
 	stdlog "log"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -35,7 +39,47 @@ var (
 	slicePool = &sync.Pool{}
 )
 
-var defaultFuncMap = template.FuncMap{
+var Must must
+
+type must struct{}
+
+func (m must) StreamHandler(o *Options) Handler {
+	h, err := StreamHandler(o)
+	if err != nil {
+		panic(err)
+	}
+	return h
+}
+
+func (m must) TemplateFormatter(tmpl string, color bool, funcs template.FuncMap) Formatter {
+	f, err := TemplateFormatter(tmpl, color, funcs)
+	if err != nil {
+		panic(err)
+	}
+	return f
+}
+
+var funcMap = template.FuncMap{
+	"basepath": func(p string) string {
+		return filepath.Base(p)
+	},
+	"color": func(style string) string {
+		return ""
+	},
+	"json": func(v interface{}) string {
+		out, err := json.Marshal(v)
+		if err != nil {
+			return ""
+		}
+		return string(out)
+	},
+	"jsonindent": func(v interface{}, indent string) string {
+		out, err := json.MarshalIndent(v, "", indent)
+		if err != nil {
+			return ""
+		}
+		return string(out)
+	},
 	"lower": func(s string) string {
 		return strings.ToLower(s)
 	},
@@ -47,6 +91,14 @@ var defaultFuncMap = template.FuncMap{
 	},
 }
 
+var colorFuncMap = template.FuncMap{}
+
+var (
+	errAlreadyClosed    = errors.New("log: stream already closed")
+	errMissingFormatter = errors.New("log: stream options need to have the Formatter field set")
+	errMissingStream    = errors.New("log: stream options need to have either the Filename or the Stream fields set")
+)
+
 type Data map[string]interface{}
 
 type Entry struct {
@@ -54,138 +106,331 @@ type Entry struct {
 	Data       Data      `codec:"data"                 json:"data"`
 	Error      bool      `codec:"error"                json:"error"`
 	File       string    `codec:"file,omitempty"       json:"file,omitempty"`
-	LineNumber int       `codec:"line,omitempty"       json:"line,omitempty"`
+	Line       int       `codec:"line,omitempty"       json:"line,omitempty"`
 	Message    string    `codec:"msg"                  json:"msg"`
-	Stacktrace []byte    `codec:"stacktrace,omitempty" json:"stacktrace,omitempty"`
+	Stacktrace string    `codec:"stacktrace,omitempty" json:"stacktrace,omitempty"`
 	Timestamp  time.Time `codec:"timestamp"            json:"timestamp"`
 }
 
 type Formatter interface {
-	Format(*Entry) ([]byte, error)
+	Write(*Entry, io.Writer) error
 }
 
-func JSONFormatter(entrySeparator string) Formatter {
-	return jsonFmt{}
+func JSONFormatter(pretty bool) Formatter {
+	return &jsonFormatter{pretty}
 }
 
-type jsonFmt struct {
+type jsonFormatter struct {
+	pretty bool
 }
 
-func (f jsonFmt) Format(e *Entry) ([]byte, error) {
-	return json.Marshal(e)
+func (f *jsonFormatter) Write(e *Entry, w io.Writer) error {
+	var (
+		err error
+		out []byte
+	)
+	if f.pretty {
+		out, err = json.MarshalIndent(e, "", "  ")
+	} else {
+		out, err = json.Marshal(e)
+	}
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(append(out, '\xff', '\n'))
+	return err
 }
 
-func TextFormatter(template string, color bool, funcs template.FuncMap) Formatter {
-	return &textFmt{}
+// SupportsColor inspects the file descriptor to figure out if it's attached to
+// a terminal, and if so, returns true for color support. Example usage:
+//
+//     useColor := log.SupportsColor(os.Stdout)
+func SupportsColor(f *os.File) bool {
+	return terminal.IsTerminal(int(f.Fd()))
 }
 
-type textFmt struct {
-	ForceColor bool
-	FuncMap    template.FuncMap
-	NoColor    bool
-	Template   string
+func TemplateFormatter(tmpl string, color bool, funcs template.FuncMap) (Formatter, error) {
+	if funcs == nil || len(funcs) == 0 {
+		if color {
+			funcs = colorFuncMap
+		} else {
+			funcs = funcMap
+		}
+	} else {
+		var base template.FuncMap
+		if color {
+			base = colorFuncMap
+		} else {
+			base = funcMap
+		}
+		for k, v := range base {
+			if funcs[k] == nil {
+				funcs[k] = v
+			}
+		}
+	}
+	indented := strings.Join(strings.Split(strings.TrimSpace(tmpl), "\n"), "\n    ")
+	description := "log.formatter\n\n    " + indented + "\n\n"
+	t, err := template.New(description).Funcs(funcs).Parse(tmpl)
+	if err != nil {
+		return nil, err
+	}
+	return &templateFormatter{
+		template: t,
+	}, nil
 }
 
-func (f *textFmt) Format(e *Entry) ([]byte, error) {
-	return nil, nil
+type templateFormatter struct {
+	template *template.Template
+}
+
+func (f *templateFormatter) Write(e *Entry, w io.Writer) error {
+	return f.template.Execute(w, e)
 }
 
 type Handler interface {
-	Close()
-	Flush()
+	Async() bool
+	Close() error
+	Flush() error
 	Log(*Entry) error
 }
 
-// fmtData
+type Options struct {
+	BufferSize    int
+	Filename      string
+	Filter        func(*Entry) bool
+	Formatter     Formatter
+	FlushInterval time.Duration
+	LogType       LogType
+	Rotate        *RotateOptions
+	Stream        io.WriteCloser
+}
 
-func Stream(opts *Options) Handler {
+type RotateOptions struct {
+	Filename   string
+	LocalTime  bool
+	MaxAge     time.Duration
+	MaxBackups int
+	MaxSize    int
+	Signal     os.Signal
+}
+
+func StreamHandler(o *Options) (Handler, error) {
 	s := &stream{}
+	var (
+		err error
+	)
+	if o.Filename != "" {
+		// Rotate existing..
+		s.file, err = os.OpenFile(o.Filename, os.O_CREATE|os.O_WRONLY, 0666)
+		if err != nil {
+			return nil, err
+		}
+		s.wc = s.file
+	} else if o.Stream != nil {
+		s.wc = o.Stream
+	} else {
+		return nil, errMissingStream
+	}
+	if o.Formatter == nil {
+		return nil, errMissingFormatter
+	}
+	s.f = o.Formatter
+	if o.BufferSize > 0 {
+		s.buf = bufio.NewWriterSize(s.wc, o.BufferSize)
+		if o.FlushInterval > 0 {
+			go s.flush(o.FlushInterval)
+		} else {
+			go s.flush(time.Second)
+		}
+	}
+	if o.LogType&ErrorLog != 0 {
+		s.logErr = true
+	}
+	if o.LogType&InfoLog != 0 {
+		s.logInfo = true
+	}
 	// process.RegisterSignalHandler(syscall.SIGHUP, file.Rotate)
-	go s.flush()
-	go s.rotate()
-	return s
+	if s.file != nil && o.Rotate != nil {
+		go s.rotate(o)
+	}
+	return s, nil
 }
 
 type stream struct {
+	buf     *bufio.Writer
 	closed  bool
-	f       *os.File
+	f       Formatter
+	file    *os.File
+	filter  func(*Entry) bool
+	logInfo bool
+	logErr  bool
+	maxSize int64
 	mu      sync.Mutex
-	w       io.Writer
+	wc      io.WriteCloser
 	written int64
 }
 
-func (s *stream) Close() {
-	if s.f != nil {
-		s.f.Close()
-	}
+func (s *stream) Async() bool {
+	return false
 }
 
-func (s *stream) Flush() {
+func (s *stream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.closed {
+		s.closed = true
+		return s.wc.Close()
+	}
+	return errAlreadyClosed
+}
+
+func (s *stream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return
+		return errAlreadyClosed
 	}
-	if s.f != nil {
-		s.f.Sync()
+	if s.buf != nil {
+		err := s.buf.Flush()
+		if err != nil {
+			return err
+		}
 	}
-}
-
-func (s *stream) Log(*Entry) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		// panic?
+	if s.file != nil {
+		err := s.file.Sync()
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func (s *stream) flush() {
-	for {
-		s.mu.Lock()
-		if s.closed {
-			return
+func (s *stream) Log(e *Entry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return errAlreadyClosed
+	}
+	if e.Error {
+		if !s.logErr {
+			return nil
 		}
-		s.mu.Unlock()
+	} else if !s.logInfo {
+		return nil
+	}
+	if s.filter != nil && !s.filter(e) {
+		return nil
+	}
+	return s.f.Write(e, s.wc)
+}
+
+func (s *stream) flush(duration time.Duration) {
+	time.Sleep(duration)
+	for s.Flush() != nil {
+		time.Sleep(duration)
 	}
 }
 
-func (s *stream) rotate() {
+func (s *stream) rotate(o *Options) {
 }
 
-func Async(capacity int, h Handler) Handler {
+// AsyncHandler wraps a handler with a channel and runs it in a separate
+// goroutine so that logging doesn't block the current thread.
+func AsyncHandler(bufsize int, h Handler) Handler {
 	a := &async{
-		ch: make(chan *Entry, capacity),
-		h:  h,
+		flush:     make(chan struct{}),
+		flushWait: make(chan struct{}),
+		handler:   h,
+		queue:     make(chan *Entry, bufsize),
+		stop:      make(chan struct{}),
 	}
 	go a.run()
 	return a
 }
 
 type async struct {
-	ch chan *Entry
-	h  Handler
+	closed    bool
+	handler   Handler
+	flush     chan struct{}
+	flushWait chan struct{}
+	mu        sync.Mutex
+	queue     chan *Entry
+	stop      chan struct{}
 }
 
-func (a async) Close() {
-	close(a.ch)
+func (a async) Async() bool {
+	return true
 }
 
-func (a async) Flush() {
-	a.h.Flush()
+func (a async) Close() error {
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return nil
+	}
+	a.closed = true
+	a.mu.Unlock()
+	a.stop <- struct{}{}
+	<-a.stop
+	close(a.stop)
+	return a.handler.Close()
+}
+
+func (a async) Flush() error {
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return nil
+	}
+	a.mu.Unlock()
+	a.flush <- struct{}{}
+	<-a.flushWait
+	return nil
 }
 
 func (a async) Log(e *Entry) error {
-	a.ch <- e
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return nil
+	}
+	a.queue <- e
+	a.mu.Unlock()
 	return nil
 }
 
 func (a async) run() {
 	var e *Entry
-	for e = range a.ch {
-		a.h.Log(e)
+	flush := false
+	stop := false
+	for {
+		select {
+		case e = <-a.queue:
+			a.handler.Log(e)
+		case <-a.stop:
+			stop = true
+		case <-a.flush:
+			flush = true
+		}
+		if flush {
+			a.mu.Lock()
+			if len(a.queue) == 0 {
+				a.mu.Unlock()
+				a.handler.Flush()
+				flush = false
+				a.flushWait <- struct{}{}
+			} else {
+				a.mu.Unlock()
+			}
+		} else if stop && len(a.queue) == 0 { // TODO(tav): check if len is thread safe
+			close(a.flush)
+			close(a.flushWait)
+			close(a.queue)
+			a.stop <- struct{}{}
+			break
+		}
 	}
-	a.h.Close()
 }
 
 func FailoverHandler(handlers ...Handler) Handler {
@@ -196,16 +441,35 @@ type failover struct {
 	handlers []Handler
 }
 
-func (f failover) Close() {
+func (f failover) Async() bool {
 	for _, h := range f.handlers {
-		h.Close()
+		if h.Async() {
+			return true
+		}
 	}
+	return false
 }
 
-func (f failover) Flush() {
+func (f failover) Close() error {
+	var firstError error
 	for _, h := range f.handlers {
-		h.Flush()
+		err := h.Close()
+		if err != nil && firstError == nil {
+			firstError = err
+		}
 	}
+	return firstError
+}
+
+func (f failover) Flush() error {
+	var firstError error
+	for _, h := range f.handlers {
+		err := h.Flush()
+		if err != nil && firstError == nil {
+			firstError = err
+		}
+	}
+	return firstError
 }
 
 func (f failover) Log(e *Entry) error {
@@ -243,16 +507,35 @@ type list struct {
 	handlers []Handler
 }
 
-func (l list) Close() {
+func (l list) Async() bool {
 	for _, h := range l.handlers {
-		h.Close()
+		if h.Async() {
+			return true
+		}
 	}
+	return false
 }
 
-func (l list) Flush() {
+func (l list) Close() error {
+	var firstError error
 	for _, h := range l.handlers {
-		h.Flush()
+		err := h.Close()
+		if err != nil && firstError == nil {
+			firstError = err
+		}
 	}
+	return firstError
+}
+
+func (l list) Flush() error {
+	var firstError error
+	for _, h := range l.handlers {
+		err := h.Close()
+		if err != nil && firstError == nil {
+			firstError = err
+		}
+	}
+	return firstError
 }
 
 func (l list) Log(e *Entry) error {
@@ -270,10 +553,6 @@ func New(ctx ...interface{}) *Logger {
 	return root.New(ctx...)
 }
 
-func Close() {
-	root.Close()
-}
-
 func Flush() {
 	root.Flush()
 }
@@ -281,6 +560,10 @@ func Flush() {
 func Error(v interface{}, data ...Data) {
 	msg, ok := v.(string)
 	if !ok {
+		if vdata, ok := v.(Data); ok {
+			root.log("", vdata, true)
+			return
+		}
 		msg = fmt.Sprint(msg)
 	}
 	if len(data) > 0 {
@@ -297,6 +580,10 @@ func Errorf(format string, args ...interface{}) {
 func Fatal(v interface{}, data ...Data) {
 	msg, ok := v.(string)
 	if !ok {
+		if vdata, ok := v.(Data); ok {
+			root.log("", vdata, true)
+			return
+		}
 		msg = fmt.Sprint(msg)
 	}
 	if len(data) > 0 {
@@ -315,6 +602,10 @@ func Fatalf(format string, args ...interface{}) {
 func Info(v interface{}, data ...Data) {
 	msg, ok := v.(string)
 	if !ok {
+		if vdata, ok := v.(Data); ok {
+			root.log("", vdata, false)
+			return
+		}
 		msg = fmt.Sprint(msg)
 	}
 	if len(data) > 0 {
@@ -326,6 +617,10 @@ func Info(v interface{}, data ...Data) {
 
 func Infof(format string, args ...interface{}) {
 	root.log(fmt.Sprintf(format, args...), nil, false)
+}
+
+func LogEntry(e *Entry) {
+	root.logEntry(e, 2)
 }
 
 func SetHandler(h Handler) {
@@ -344,6 +639,7 @@ type Logger struct {
 	lazy       []string
 	parent     *Logger
 	stacktrace bool
+	stop       bool
 }
 
 // Create a new logger.
@@ -387,6 +683,10 @@ func (l *Logger) New(ctx ...interface{}) *Logger {
 	panic("log.New must be called with a either a single argument (which must be a string or log.Data) or with two arguments (first the string context, followed by a log.Data object)")
 }
 
+// Close the underlying handler for this logger.
+//
+// Please note that if you set a handler on the root logger, then it is your
+// responsibility to manually close any underlying resources.
 func (l *Logger) Close() {
 	if l.handler != nil {
 		l.handler.Close()
@@ -398,7 +698,7 @@ func (l *Logger) ToggleDebug(enable bool, stacktrace bool) {
 	l.stacktrace = stacktrace
 }
 
-// Manage the underlying handlers for this logger.
+// Flush the underlying handler for this logger.
 func (l *Logger) Flush() {
 	if l.handler != nil {
 		l.handler.Flush()
@@ -408,6 +708,10 @@ func (l *Logger) Flush() {
 func (l *Logger) Error(v interface{}, data ...Data) {
 	msg, ok := v.(string)
 	if !ok {
+		if vdata, ok := v.(Data); ok {
+			l.log("", vdata, true)
+			return
+		}
 		msg = fmt.Sprint(msg)
 	}
 	if len(data) > 0 {
@@ -424,6 +728,10 @@ func (l *Logger) Errorf(format string, args ...interface{}) {
 func (l *Logger) Info(v interface{}, data ...Data) {
 	msg, ok := v.(string)
 	if !ok {
+		if vdata, ok := v.(Data); ok {
+			l.log("", vdata, false)
+			return
+		}
 		msg = fmt.Sprint(msg)
 	}
 	if len(data) > 0 {
@@ -445,17 +753,23 @@ func (l *Logger) log(msg string, data Data, isError bool) {
 	} else {
 		e = entry.(*Entry)
 		e.File = ""
-		e.LineNumber = 0
+		e.Line = 0
 	}
 	e.Context = l.context
+	e.Data = data
 	e.Error = isError
 	e.Message = msg
 	e.Timestamp = time.Now()
+	l.logEntry(e, 3)
+}
+
+func (l *Logger) logEntry(e *Entry, depth int) {
 	var buf []byte
 	var debugSet int
-	for l.handler != nil {
+	var async bool
+	for {
 		if l.debug && debugSet == 0 {
-			_, e.File, e.LineNumber, _ = runtime.Caller(2)
+			_, e.File, e.Line, _ = runtime.Caller(3)
 			if l.stacktrace {
 				slice := slicePool.Get()
 				if slice == nil {
@@ -463,237 +777,44 @@ func (l *Logger) log(msg string, data Data, isError bool) {
 				} else {
 					buf = slice.([]byte)
 				}
-				buf = buf[:runtime.Stack(buf, false)]
+				e.Stacktrace = string(buf[:runtime.Stack(buf, false)])
 				debugSet = 2
 			} else {
 				debugSet = 1
 			}
 		}
-		l.handler.Log(e)
-		if l.parent == nil {
+		if l.handler != nil {
+			l.handler.Log(e)
+			if l.handler.Async() {
+				async = true
+			}
+		}
+		if l.parent == nil || l.stop {
 			break
 		}
 		l = l.parent
 	}
-	entryPool.Put(e)
-	if debugSet == 2 {
-		slicePool.Put(buf)
+	if !async {
+		entryPool.Put(e)
+		if debugSet == 2 {
+			slicePool.Put(buf)
+		}
 	}
+}
+
+func (l *Logger) LogEntry(e *Entry) {
+	l.logEntry(e, 2)
 }
 
 // SetHandler and ToggleDebug are not intended to be threadsafe. Make sure
 // to set them before using the logger from multiple goroutines.
 func (l *Logger) SetHandler(h Handler) {
-	root.SetHandler(h)
+	l.handler = h
 }
 
-type Options struct {
-	BufferSize     int
-	Filename       string
-	Filter         func(*Entry) bool
-	Formatter      Formatter
-	FlushInterval  time.Time
-	LocalTime      bool
-	LogType        LogType
-	MaxAge         time.Duration
-	MaxBackups     int
-	MaxSize        int
-	RotateOnSignal os.Signal
-	Stream         io.WriteCloser
+func (l *Logger) StopPropagation() {
+	l.stop = true
 }
-
-// var (
-// 	colors           = map[string]string{"info": "32", "error": "31"}
-// 	checker          = make(chan int, 1)
-// 	consoleTimestamp = true
-// )
-
-// func (Logger *ConsoleLogger) log() {
-
-// 	var record *Record
-// 	var file *os.File
-// 	var items []interface{}
-// 	var prefix, status string
-// 	var prefixErr, prefixInfo string
-// 	var suffix []byte
-// 	var write bool
-
-// 	if colorify {
-// 		prefixErr = fmt.Sprintf("\x1b[%sm", colors["error"])
-// 		prefixInfo = fmt.Sprintf("\x1b[%sm", colors["info"])
-// 		suffix = []byte("\x1b[0m\n")
-// 	} else {
-// 		suffix = []byte{'\n'}
-// 	}
-
-// 	for {
-// 		select {
-// 		case record = <-Logger.receiver:
-// 			items = record.Items
-// 			write = true
-// 			if filter, present := ConsoleFilters[record.Type]; present {
-// 				write, items = filter(items)
-// 				if !write || items == nil {
-// 					continue
-// 				}
-// 			}
-// 			if record.Error {
-// 				file = os.Stderr
-// 			} else {
-// 				file = os.Stdout
-// 			}
-// 			if record.Error {
-// 				prefix = prefixErr
-// 				status = "ERROR: "
-// 			} else {
-// 				prefix = prefixInfo
-// 				status = ""
-// 			}
-// 			if consoleTimestamp {
-// 				year, month, day := now.Date()
-// 				hour, minute, second := now.Clock()
-// 				fmt.Fprintf(file, "%s[%s-%s-%s %s:%s:%s] %s", prefix,
-// 					encoding.PadInt(year, 4), encoding.PadInt(int(month), 2),
-// 					encoding.PadInt(day, 2), encoding.PadInt(hour, 2),
-// 					encoding.PadInt(minute, 2), encoding.PadInt(second, 2),
-// 					status)
-// 			} else {
-// 				fmt.Fprintf(file, "%s%s", prefix, status)
-// 			}
-// 			for idx, item := range items {
-// 				if idx == 0 {
-// 					fmt.Fprintf(file, "%v", item)
-// 				} else {
-// 					fmt.Fprintf(file, " %v", item)
-// 				}
-// 			}
-// 			file.Write(suffix)
-// 		case <-checker:
-// 			if len(Logger.receiver) > 0 {
-// 				checker <- 1
-// 				continue
-// 			}
-// 			waiter <- 1
-// 		}
-// 	}
-
-// }
-
-// const (
-// 	endOfRecord  = '\n'
-// 	terminalByte = '\xff'
-// )
-
-// var endOfLogRecord = []byte{'\xff', '\n'}
-
-// type FileLogger struct {
-// 	name      string
-// 	directory string
-// 	rotate    int
-// 	file      *os.File
-// 	filename  string
-// 	receiver  chan *Record
-// }
-
-// func (Logger *FileLogger) log() {
-
-// 	rotateSignal := make(chan string)
-// 	if logger.rotate > 0 {
-// 		go signalRotation(logger, rotateSignal)
-// 	}
-
-// 	var record *Record
-// 	var filename string
-
-// 	for {
-// 		select {
-// 		case filename = <-rotateSignal:
-// 			if filename != logger.filename {
-// 				file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY, 0666)
-// 				if err == nil {
-// 					logger.file.Close()
-// 					logger.file = file
-// 					logger.filename = filename
-// 				} else {
-// 					fmt.Fprintf(os.Stderr, "ERROR: Couldn't rotate log: %s\n", err)
-// 				}
-// 			}
-// 		case record = <-logger.receiver:
-// 			argLength := len(record.Items)
-// 			if record.Error {
-// 				logger.file.Write([]byte{'E'})
-// 			} else {
-// 				logger.file.Write([]byte{'I'})
-// 			}
-// 			fmt.Fprintf(logger.file, "%v", now)
-// 			for i := 0; i < argLength; i++ {
-// 				message := strconv.Quote(fmt.Sprint(record.Items[i]))
-// 				fmt.Fprintf(logger.file, "\xfe%s", message[0:len(message)-1])
-// 			}
-// 			logger.file.Write(endOfLogRecord)
-// 		}
-// 	}
-
-// }
-
-// func (logger *FileLogger) GetFilename(timestamp time.Time) string {
-// 	var suffix string
-// 	switch logger.rotate {
-// 	case RotateNever:
-// 		suffix = ""
-// 	case RotateDaily:
-// 		suffix = timestamp.Format(".2006-01-02")
-// 	case RotateHourly:
-// 		suffix = timestamp.Format(".2006-01-02.03")
-// 	case RotateTest:
-// 		suffix = timestamp.Format(".2006-01-02.03-04-05")
-// 	}
-// 	filename := logger.name + suffix + ".log"
-// 	return path.Join(logger.directory, filename)
-// }
-
-// func signalRotation(logger *FileLogger, signalChannel chan string) {
-// 	var interval time.Duration
-// 	var filename string
-// 	switch logger.rotate {
-// 	case RotateDaily:
-// 		interval = 86400000000000
-// 	case RotateHourly:
-// 		interval = 3600000000000
-// 	case RotateTest:
-// 		interval = 3000000000
-// 	}
-// 	for {
-// 		filename = logger.GetFilename(now)
-// 		if filename != logger.filename {
-// 			signalChannel <- filename
-// 		}
-// 		<-time.After(interval)
-// 	}
-// }
-
-// func AddFileLogger(name string, directory string, rotate int, logType int) (logger *FileLogger, err error) {
-// 	logger = &FileLogger{
-// 		name:      name,
-// 		directory: directory,
-// 		rotate:    rotate,
-// 		receiver:  make(chan *Record, 100),
-// 	}
-// 	filename := logger.GetFilename(now)
-// 	pointer := FixUpLog(filename)
-// 	file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY, 0666)
-// 	if err != nil {
-// 		return logger, err
-// 	}
-// 	if pointer > 0 {
-// 		file.Seek(int64(pointer), 0)
-// 	}
-// 	logger.file = file
-// 	logger.filename = filename
-// 	go logger.log()
-// 	AddReceiver(logger.receiver, logType)
-// 	return logger, nil
-// }
 
 type hijacker struct{}
 
@@ -703,28 +824,40 @@ func (h hijacker) Write(p []byte) (int, error) {
 }
 
 func init() {
+	for k, v := range funcMap {
+		colorFuncMap[k] = v
+	}
+	colorFuncMap["color"] = ansi.ColorCode
+}
+
+func init() {
 
 	// Hijack the standard library's log functionality.
 	stdlog.SetFlags(0)
 	stdlog.SetOutput(hijacker{})
 
 	// Flush logs on exit.
-	process.SetExitHandler(Close)
+	process.SetExitHandler(Flush)
 
-	if os.Getenv("DISABLE_DEFAULT_LOG_HANDLERS") != "" {
-		format := JSONFormatter("")
-		terminal.IsTerminal(int(os.Stderr.Fd()))
-		stdoutOpts := &Options{
-			Formatter: format,
-			LogType:   InfoLog,
-			Stream:    os.Stdout,
-		}
-		stderrOpts := &Options{
-			Formatter: format,
-			LogType:   ErrorLog,
-			Stream:    os.Stderr,
-		}
-		SetHandler(MultiHandler(Stream(stdoutOpts), Stream(stderrOpts)))
+	// Initialise the default log handlers.
+	if os.Getenv("DISABLE_DEFAULT_LOG_HANDLERS") == "" {
+		stdoutHandler := Must.StreamHandler(&Options{
+			BufferSize: 4096,
+			Formatter: Must.TemplateFormatter(
+				`{{color "green"}}{{.Timestamp.Format "[2006-01-02 15:04:05]"}} {{printf "%-60s" .Message}}{{if .Data}}{{json .Data}}{{end}}{{color "reset"}}
+`, SupportsColor(os.Stdout), nil),
+			LogType: InfoLog,
+			Stream:  os.Stdout,
+		})
+		stderrHandler := Must.StreamHandler(&Options{
+			BufferSize: 4096,
+			Formatter: Must.TemplateFormatter(
+				`{{color "red"}}{{.Timestamp.Format "[2006-01-02 15:04:05]"}} ERROR: {{printf "%-60s" .Message}}{{if .Data}}{{json .Data}}{{end}}{{color "reset"}}
+`, SupportsColor(os.Stderr), nil),
+			LogType: ErrorLog,
+			Stream:  os.Stderr,
+		})
+		SetHandler(MultiHandler(stdoutHandler, stderrHandler))
 	}
 
 }
