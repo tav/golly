@@ -210,7 +210,7 @@ func (l list) Close() error {
 func (l list) Flush() error {
 	var firstError error
 	for _, h := range l.handlers {
-		err := h.Close()
+		err := h.Flush()
 		if err != nil && firstError == nil {
 			firstError = err
 		}
