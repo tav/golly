@@ -471,7 +471,7 @@ func (p *Parser) Parse(args []string) (remainder []string) {
 				p.PrintUsage()
 				os.Exit(1)
 			} else if op.longFlag == "--version" && p.ParseVersion {
-				fmt.Printf("%s\n", p.version)
+				fmt.Printf("%s\n", p.version())
 				os.Exit(0)
 			}
 			v := op.value.(*bool)
