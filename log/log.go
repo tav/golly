@@ -10,21 +10,20 @@ import (
 	"github.com/tav/golly/process"
 	stdlog "log"
 	"os"
+	"runtime"
 	"text/template"
 	"time"
 )
 
-type Data map[string]interface{}
-
 type Entry struct {
-	Context    string    `codec:"ctx"                  json:"ctx"`
-	Data       Data      `codec:"data"                 json:"data"`
-	Error      bool      `codec:"error"                json:"error"`
-	File       string    `codec:"file,omitempty"       json:"file,omitempty"`
-	Line       int       `codec:"line,omitempty"       json:"line,omitempty"`
-	Message    string    `codec:"msg"                  json:"msg"`
-	Stacktrace string    `codec:"stacktrace,omitempty" json:"stacktrace,omitempty"`
-	Timestamp  time.Time `codec:"timestamp"            json:"timestamp"`
+	Context    string      `codec:"ctx"                  json:"ctx"`
+	Data       interface{} `codec:"data"                 json:"data"`
+	Error      bool        `codec:"error"                json:"error"`
+	File       string      `codec:"file,omitempty"       json:"file,omitempty"`
+	Line       int         `codec:"line,omitempty"       json:"line,omitempty"`
+	Message    string      `codec:"msg"                  json:"msg"`
+	Stacktrace string      `codec:"stacktrace,omitempty" json:"stacktrace,omitempty"`
+	Timestamp  time.Time   `codec:"timestamp"            json:"timestamp"`
 }
 
 // You can specify the LogType field on Options to control whether to log info
@@ -57,86 +56,75 @@ func (m must) TemplateFormatter(tmpl string, color bool, funcs template.FuncMap)
 	return f
 }
 
-func New(ctx ...interface{}) *Logger {
-	return root.New(ctx...)
+func New(ctx string) *Logger {
+	return root.New(ctx)
 }
 
 func Flush() {
 	root.Flush()
 }
 
-func Error(v interface{}, data ...Data) {
-	msg, ok := v.(string)
-	if !ok {
-		if vdata, ok := v.(Data); ok {
-			root.log("", vdata, true)
-			return
-		}
-		msg = fmt.Sprint(v)
-	}
-	if len(data) > 0 {
-		root.log(msg, data[0], true)
-	} else {
-		root.log(msg, nil, true)
-	}
+func Debug(args ...interface{}) {
+	root.log(fmt.Sprint(args...), nil, false, true)
+}
+
+func Debugf(format string, args ...interface{}) {
+	root.log(fmt.Sprintf(format, args...), nil, false, true)
+}
+
+func DebugData(message string, data interface{}) {
+	root.log(message, data, false, true)
+}
+
+func Error(args ...interface{}) {
+	root.log(fmt.Sprint(args...), nil, true, true)
 }
 
 func Errorf(format string, args ...interface{}) {
-	root.log(fmt.Sprintf(format, args...), nil, true)
+	root.log(fmt.Sprintf(format, args...), nil, true, true)
 }
 
-func Fatal(v interface{}, data ...Data) {
-	msg, ok := v.(string)
-	if !ok {
-		if vdata, ok := v.(Data); ok {
-			root.log("", vdata, true)
-			return
-		}
-		msg = fmt.Sprint(v)
-	}
-	if len(data) > 0 {
-		root.log(msg, data[0], true)
-	} else {
-		root.log(msg, nil, true)
-	}
+func ErrorData(message string, data interface{}) {
+	root.log(message, data, true, true)
+}
+
+func Fatal(args ...interface{}) {
+	root.log(fmt.Sprint(args...), nil, true, true)
 	process.Exit(1)
 }
 
 func Fatalf(format string, args ...interface{}) {
-	root.log(fmt.Sprintf(format, args...), nil, true)
+	root.log(fmt.Sprintf(format, args...), nil, true, true)
 	process.Exit(1)
 }
 
-func Info(v interface{}, data ...Data) {
-	msg, ok := v.(string)
-	if !ok {
-		if vdata, ok := v.(Data); ok {
-			root.log("", vdata, false)
-			return
-		}
-		msg = fmt.Sprint(v)
-	}
-	if len(data) > 0 {
-		root.log(msg, data[0], false)
-	} else {
-		root.log(msg, nil, false)
-	}
+func Info(args ...interface{}) {
+	root.log(fmt.Sprint(args...), nil, false, true)
 }
 
 func Infof(format string, args ...interface{}) {
-	root.log(fmt.Sprintf(format, args...), nil, false)
+	root.log(fmt.Sprintf(format, args...), nil, false, true)
+}
+
+func InfoData(message string, data interface{}) {
+	root.log(message, data, false, true)
 }
 
 func LogEntry(e *Entry) {
-	root.logEntry(e, 2)
+	root.logEntry(e, false, 2)
+}
+
+// NewEntry returns an Entry item prefilled with debug info.
+func NewEntry(depth int) *Entry {
+	e := &Entry{}
+	_, e.File, e.Line, _ = runtime.Caller(depth)
+	buf := make([]byte, 4096)
+	e.Stacktrace = string(buf[:runtime.Stack(buf, false)])
+	return e
 }
 
 func SetHandler(h Handler) {
 	root.SetHandler(h)
-}
-
-func ToggleDebug(lineinfo bool, stacktrace bool) {
-	root.ToggleDebug(lineinfo, stacktrace)
 }
 
 type hijacker struct{}
@@ -176,7 +164,8 @@ func init() {
 		stderrHandler := Must.StreamHandler(&Options{
 			BufferSize: 4096,
 			Formatter: Must.TemplateFormatter(
-				`{{color "red"}}{{.Timestamp.Format "[2006-01-02 15:04:05]"}} ERROR: {{printf "%-60s" .Message}}{{if .Data}}{{json .Data}}{{end}}{{color "reset"}}
+				`{{color "red"}}{{.Timestamp.Format "[2006-01-02 15:04:05]"}} ERROR: {{printf "%-60s" .Message}}{{if .Data}}{{json .Data}}{{end}}{{if .File}}
+{{.Timestamp.Format "[2006-01-02 15:04:05]"}} ERROR: {{.File}}:{{.Line}}{{end}}{{color "reset"}}
 `, SupportsColor(os.Stderr), nil),
 			LogType: ErrorLog,
 			Stream:  os.Stderr,

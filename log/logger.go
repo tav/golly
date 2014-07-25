@@ -18,54 +18,25 @@ var (
 
 type Logger struct {
 	context    string
-	data       Data
-	debug      bool
 	handler    Handler
-	lazy       []string
 	parent     *Logger
 	stacktrace bool
 	stop       bool
 }
 
 // Create a new logger.
-func (l *Logger) New(ctx ...interface{}) *Logger {
-	switch len(ctx) {
-	case 0:
-		return &Logger{
-			context: l.context,
-			parent:  l,
-		}
-	case 1:
-		if context, ok := ctx[0].(string); ok {
-			if l.context != "" {
-				context = l.context + "." + context
-			}
-			return &Logger{
-				context: context,
-				parent:  l,
-			}
-		} else if data, ok := ctx[0].(Data); ok {
-			return &Logger{
-				context: l.context,
-				data:    data,
-				parent:  l,
-			}
-		}
-	case 2:
-		if context, ok := ctx[0].(string); ok {
-			if l.context != "" {
-				context = l.context + "." + context
-			}
-			if data, ok := ctx[1].(Data); ok {
-				return &Logger{
-					context: context,
-					data:    data,
-					parent:  l,
-				}
-			}
+func (l *Logger) New(ctx string) *Logger {
+	if l.context != "" {
+		if ctx != "" {
+			ctx = l.context + "." + ctx
+		} else {
+			ctx = l.context
 		}
 	}
-	panic("log.New must be called with a either a single argument (which must be a string or log.Data) or with two arguments (first the string context, followed by a log.Data object)")
+	return &Logger{
+		context: l.context,
+		parent:  l,
+	}
 }
 
 // Close the underlying handler for this logger.
@@ -78,9 +49,28 @@ func (l *Logger) Close() {
 	}
 }
 
-func (l *Logger) ToggleDebug(enable bool, stacktrace bool) {
-	l.debug = enable
-	l.stacktrace = stacktrace
+func (l *Logger) Debug(args ...interface{}) {
+	l.log(fmt.Sprint(args...), nil, false, true)
+}
+
+func (l *Logger) Debugf(format string, args ...interface{}) {
+	l.log(fmt.Sprintf(format, args...), nil, false, true)
+}
+
+func (l *Logger) DebugData(message string, data interface{}) {
+	l.log(message, data, false, true)
+}
+
+func (l *Logger) Error(args ...interface{}) {
+	l.log(fmt.Sprint(args...), nil, true, true)
+}
+
+func (l *Logger) Errorf(format string, args ...interface{}) {
+	l.log(fmt.Sprintf(format, args...), nil, true, true)
+}
+
+func (l *Logger) ErrorData(message string, data interface{}) {
+	l.log(message, data, true, true)
 }
 
 // Flush the underlying handler for this logger.
@@ -90,47 +80,19 @@ func (l *Logger) Flush() {
 	}
 }
 
-func (l *Logger) Error(v interface{}, data ...Data) {
-	msg, ok := v.(string)
-	if !ok {
-		if vdata, ok := v.(Data); ok {
-			l.log("", vdata, true)
-			return
-		}
-		msg = fmt.Sprint(v)
-	}
-	if len(data) > 0 {
-		l.log(msg, data[0], true)
-	} else {
-		l.log(msg, nil, true)
-	}
+func (l *Logger) Log(args ...interface{}) {
+	l.log(fmt.Sprint(args...), nil, false, false)
 }
 
-func (l *Logger) Errorf(format string, args ...interface{}) {
-	l.log(fmt.Sprintf(format, args...), nil, true)
+func (l *Logger) Logf(format string, args ...interface{}) {
+	l.log(fmt.Sprintf(format, args...), nil, false, false)
 }
 
-func (l *Logger) Info(v interface{}, data ...Data) {
-	msg, ok := v.(string)
-	if !ok {
-		if vdata, ok := v.(Data); ok {
-			l.log("", vdata, false)
-			return
-		}
-		msg = fmt.Sprint(v)
-	}
-	if len(data) > 0 {
-		l.log(msg, data[0], false)
-	} else {
-		l.log(msg, nil, false)
-	}
+func (l *Logger) LogData(message string, data interface{}) {
+	l.log(message, data, false, false)
 }
 
-func (l *Logger) Infof(format string, args ...interface{}) {
-	l.log(fmt.Sprintf(format, args...), nil, false)
-}
-
-func (l *Logger) log(msg string, data Data, isError bool) {
+func (l *Logger) log(msg string, data interface{}, isError bool, debug bool) {
 	var e *Entry
 	entry := entryPool.Get()
 	if entry == nil {
@@ -139,34 +101,31 @@ func (l *Logger) log(msg string, data Data, isError bool) {
 		e = entry.(*Entry)
 		e.File = ""
 		e.Line = 0
+		e.Stacktrace = ""
 	}
 	e.Context = l.context
 	e.Data = data
 	e.Error = isError
 	e.Message = msg
 	e.Timestamp = time.Now()
-	l.logEntry(e, 3)
+	l.logEntry(e, debug, 3)
 }
 
-func (l *Logger) logEntry(e *Entry, depth int) {
+func (l *Logger) logEntry(e *Entry, debug bool, depth int) {
 	var buf []byte
-	var debugSet int
+	var debugSet bool
 	var async bool
 	for {
-		if l.debug && debugSet == 0 {
-			_, e.File, e.Line, _ = runtime.Caller(3)
-			if l.stacktrace {
-				slice := slicePool.Get()
-				if slice == nil {
-					buf = make([]byte, 4096)
-				} else {
-					buf = slice.([]byte)
-				}
-				e.Stacktrace = string(buf[:runtime.Stack(buf, false)])
-				debugSet = 2
+		if debug && !debugSet {
+			_, e.File, e.Line, _ = runtime.Caller(depth)
+			slice := slicePool.Get()
+			if slice == nil {
+				buf = make([]byte, 4096)
 			} else {
-				debugSet = 1
+				buf = slice.([]byte)
 			}
+			e.Stacktrace = string(buf[:runtime.Stack(buf, false)])
+			debugSet = true
 		}
 		if l.handler != nil {
 			l.handler.Log(e)
@@ -181,14 +140,14 @@ func (l *Logger) logEntry(e *Entry, depth int) {
 	}
 	if !async {
 		entryPool.Put(e)
-		if debugSet == 2 {
+		if debugSet {
 			slicePool.Put(buf)
 		}
 	}
 }
 
 func (l *Logger) LogEntry(e *Entry) {
-	l.logEntry(e, 2)
+	l.logEntry(e, false, 2)
 }
 
 // SetHandler and ToggleDebug are not intended to be threadsafe. Make sure

@@ -4,7 +4,6 @@
 package log
 
 import (
-	"fmt"
 	"sync"
 )
 
@@ -158,22 +157,6 @@ func (f failover) Log(e *Entry) error {
 		err = h.Log(e)
 		if err == nil {
 			return nil
-		}
-		if e.Data == nil {
-			e.Data = Data{}
-			e.Data["golly_log_failover_1"] = err.Error()
-		} else {
-			id := 1
-			key := fmt.Sprintf("golly_log_failover_%d", id)
-			for {
-				if _, exists := e.Data[key]; exists {
-					id += 1
-					key = fmt.Sprintf("golly_log_failover_%d", id)
-				} else {
-					break
-				}
-			}
-			e.Data[key] = err.Error()
 		}
 	}
 	return err
