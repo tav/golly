@@ -80,15 +80,15 @@ func (l *Logger) Flush() {
 	}
 }
 
-func (l *Logger) Log(args ...interface{}) {
+func (l *Logger) Info(args ...interface{}) {
 	l.log(fmt.Sprint(args...), nil, false, false)
 }
 
-func (l *Logger) Logf(format string, args ...interface{}) {
+func (l *Logger) Infof(format string, args ...interface{}) {
 	l.log(fmt.Sprintf(format, args...), nil, false, false)
 }
 
-func (l *Logger) LogData(message string, data interface{}) {
+func (l *Logger) InfoData(message string, data interface{}) {
 	l.log(message, data, false, false)
 }
 
