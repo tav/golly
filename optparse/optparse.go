@@ -1,4 +1,4 @@
-// Public Domain (-) 2010-2014 The Golly Authors.
+// Public Domain (-) 2010-2015 The Golly Authors.
 // See the Golly UNLICENSE file for details.
 
 // Package optparse provides utility functions for the parsing and
@@ -8,6 +8,8 @@ package optparse
 import (
 	"fmt"
 	"github.com/flynn/go-shlex"
+	"github.com/tav/golly/log"
+	"github.com/tav/golly/process"
 	"github.com/tav/golly/structure"
 	"os"
 	"os/exec"
@@ -42,12 +44,8 @@ func (c ListCompleter) Complete([]string, int) []string {
 }
 
 func exit(message string, v ...interface{}) {
-	if len(v) == 0 {
-		fmt.Fprint(os.Stderr, message)
-	} else {
-		fmt.Fprintf(os.Stderr, message, v...)
-	}
-	os.Exit(1)
+	log.Errorf(message, v...)
+	process.Exit(1)
 }
 
 type Parser struct {
@@ -131,7 +129,7 @@ func (p *Parser) newOpt(description string, showLabel bool) *option {
 		}
 	}
 	if op.shortFlag == "" && op.longFlag == "" {
-		exit("optparse error: no -short or --long flags found for option with description: %s\n", description)
+		exit("optparse: no -short or --long flags found for option with description: %s", description)
 	}
 	if !op.hidden {
 		if showLabel {
@@ -170,7 +168,7 @@ func (p *Parser) Int(description string, defaultValue ...int) *int {
 			var err error
 			v, err = strconv.Atoi(description[idx+1 : len(description)-1])
 			if err != nil {
-				exit("optparse error: could not parse default value from: %s\n", description)
+				exit("optparse: could not parse default value from: %s", description)
 			}
 		}
 	}
@@ -250,7 +248,7 @@ func (p *Parser) HaltFlagParsing(v interface{}) *Parser {
 		p.haltFlagParsing = true
 		p.haltFlagParsingString = s
 	} else {
-		exit("optparse error: expected non-empty string or int value for HaltFlagParsing()")
+		exit("optparse: expected non-empty string or int value for HaltFlagParsing()")
 	}
 	return p
 }
@@ -459,11 +457,11 @@ func (p *Parser) Parse(args []string) (remainder []string) {
 			continue
 		}
 		if noOpt {
-			exit("%s: error: no such option: %s\n", args[0], arg)
+			exit("%s: no such option: %s", args[0], arg)
 		}
 		if op.label != "" {
 			if idx == argLength {
-				exit("%s: error: %s option requires an argument\n", args[0], arg)
+				exit("%s: %s option requires an argument", args[0], arg)
 			}
 		}
 		if op.valueType == boolValue {
@@ -480,7 +478,7 @@ func (p *Parser) Parse(args []string) (remainder []string) {
 			idx += 1
 		} else if op.valueType == stringValue {
 			if idx == argLength {
-				exit("%s: error: no value specified for %s\n", args[0], arg)
+				exit("%s: no value specified for %s", args[0], arg)
 			}
 			v := op.value.(*string)
 			*v = args[idx+1]
@@ -488,11 +486,11 @@ func (p *Parser) Parse(args []string) (remainder []string) {
 			idx += 2
 		} else if op.valueType == intValue {
 			if idx == argLength {
-				exit("%s: error: no value specified for %s\n", args[0], arg)
+				exit("%s: no value specified for %s", args[0], arg)
 			}
 			intValue, err := strconv.Atoi(args[idx+1])
 			if err != nil {
-				exit("%s: error: couldn't convert %s value '%s' to an integer\n", args[0], arg, args[idx+1])
+				exit("%s: couldn't convert %s value '%s' to an integer", args[0], arg, args[idx+1])
 			}
 			v := op.value.(*int)
 			*v = intValue
@@ -506,7 +504,7 @@ func (p *Parser) Parse(args []string) (remainder []string) {
 
 	for _, op := range p.options {
 		if op.required && !op.defined {
-			exit("%s: error: required: %s", args[0], op)
+			exit("%s: required: %s", args[0], op)
 		}
 	}
 
@@ -546,7 +544,7 @@ func (p *Parser) SetVersion(value interface{}) *Parser {
 		setVersion = true
 	}
 	if !setVersion {
-		exit("optparse error: the SetVersion value needs to be a string or a function returning a string\n")
+		exit("optparse: the SetVersion value needs to be a string or a function returning a string")
 	}
 	p.version = versionFunc
 	p.ParseVersion = true
@@ -591,7 +589,7 @@ func getCompletionData() (complete bool, words []string, compWord int, prefix st
 
 		words, err = shlex.Split(os.Getenv("COMP_LINE"))
 		if err != nil {
-			exit("optparse error: could not shlex autocompletion words: %s", err)
+			exit("optparse: could not shlex autocompletion words: %s", err)
 		}
 
 		compWord, err = strconv.Atoi(os.Getenv("COMP_CWORD"))
@@ -633,7 +631,7 @@ func Commands(name string, version interface{}, commands map[string]func([]strin
 			exe := fmt.Sprintf("%s-%s", strings.Replace(name, " ", "-", -1), command)
 			exePath, err := exec.LookPath(exe)
 			if err != nil {
-				exit("ERROR: Couldn't find '%s'\n", exe)
+				exit("%s: '%s' is not a valid command: see '%s help'", name, command, name)
 			}
 
 			args[0] = exe
@@ -645,16 +643,16 @@ func Commands(name string, version interface{}, commands map[string]func([]strin
 				})
 
 			if err != nil {
-				exit(fmt.Sprintf("ERROR: %s: %s\n", exe, err))
+				exit("%s: %s", exe, err)
 			}
 
 			_, err = process.Wait()
 			if err != nil {
-				exit(fmt.Sprintf("ERROR: %s: %s\n", exe, err))
+				exit("%s: %s", exe, err)
 			}
 
 		} else {
-			exit(fmt.Sprintf("%s: error: no such option: %s\n", name, command))
+			exit(fmt.Sprintf("%s: no such option: %s", name, command))
 		}
 		os.Exit(0)
 	}
@@ -673,12 +671,12 @@ func Commands(name string, version interface{}, commands map[string]func([]strin
 			}
 
 			if len(helpArgs) != 1 {
-				exit("ERROR: Unknown command '%s'\n", strings.Join(helpArgs, " "))
+				exit("%s: invalid help option: '%s'", name, strings.Join(helpArgs, " "))
 			}
 
 			command := helpArgs[0]
 			if command == "help" {
-				fmt.Print(mainUsage)
+				exit("%s: invalid help command on help", name)
 			} else {
 				if !complete {
 					argLen := len(os.Args)
