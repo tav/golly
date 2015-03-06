@@ -1,4 +1,4 @@
-// Public Domain (-) 2010-2013 The Golly Authors.
+// Public Domain (-) 2010-2015 The Golly Authors.
 // See the Golly UNLICENSE file for details.
 
 // Package tlsconf provides utility functions to support
@@ -59,9 +59,10 @@ func Load(certpath string) (*tls.Config, error) {
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(data)
 	config := &tls.Config{
-		Rand:    rand.Reader,
-		Time:    time.Now,
-		RootCAs: roots,
+		MinVersion: tls.VersionTLS10,
+		Rand:       rand.Reader,
+		RootCAs:    roots,
+		Time:       time.Now,
 	}
 	return config, nil
 }
