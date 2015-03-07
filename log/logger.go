@@ -62,15 +62,15 @@ func (l *Logger) DebugData(message string, data interface{}) {
 }
 
 func (l *Logger) Error(args ...interface{}) {
-	l.log(fmt.Sprint(args...), nil, true, true)
+	l.log(fmt.Sprint(args...), nil, true, false)
 }
 
 func (l *Logger) Errorf(format string, args ...interface{}) {
-	l.log(fmt.Sprintf(format, args...), nil, true, true)
+	l.log(fmt.Sprintf(format, args...), nil, true, false)
 }
 
 func (l *Logger) ErrorData(message string, data interface{}) {
-	l.log(message, data, true, true)
+	l.log(message, data, true, false)
 }
 
 // Flush the underlying handler for this logger.

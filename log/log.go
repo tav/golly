@@ -77,37 +77,37 @@ func DebugData(message string, data interface{}) {
 }
 
 func Error(args ...interface{}) {
-	root.log(fmt.Sprint(args...), nil, true, true)
+	root.log(fmt.Sprint(args...), nil, true, false)
 }
 
 func Errorf(format string, args ...interface{}) {
-	root.log(fmt.Sprintf(format, args...), nil, true, true)
+	root.log(fmt.Sprintf(format, args...), nil, true, false)
 }
 
 func ErrorData(message string, data interface{}) {
-	root.log(message, data, true, true)
+	root.log(message, data, true, false)
 }
 
 func Fatal(args ...interface{}) {
-	root.log(fmt.Sprint(args...), nil, true, true)
+	root.log(fmt.Sprint(args...), nil, true, false)
 	process.Exit(1)
 }
 
 func Fatalf(format string, args ...interface{}) {
-	root.log(fmt.Sprintf(format, args...), nil, true, true)
+	root.log(fmt.Sprintf(format, args...), nil, true, false)
 	process.Exit(1)
 }
 
 func Info(args ...interface{}) {
-	root.log(fmt.Sprint(args...), nil, false, true)
+	root.log(fmt.Sprint(args...), nil, false, false)
 }
 
 func Infof(format string, args ...interface{}) {
-	root.log(fmt.Sprintf(format, args...), nil, false, true)
+	root.log(fmt.Sprintf(format, args...), nil, false, false)
 }
 
 func InfoData(message string, data interface{}) {
-	root.log(message, data, false, true)
+	root.log(message, data, false, false)
 }
 
 func LogEntry(e *Entry) {
