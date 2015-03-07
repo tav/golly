@@ -1,132 +1,122 @@
-// Public Domain (-) 2011 The Golly Authors.
+// Public Domain (-) 2011-2015 The Golly Authors.
 // See the Golly UNLICENSE file for details.
 
 // Package refmap provides a map-like object so integer refs can be used in
 // place of long strings.
 package refmap
 
-import "sync"
-
-const Zero uint64 = 0
-const One uint64 = 1
+type value struct {
+	count int
+	s     string
+}
 
 type Map struct {
-	Info   map[uint64]*Ref
-	Lookup map[string]uint64
-	Mutex  sync.RWMutex
-	val    uint64
+	lastRef uint64
+	refs    map[uint64]value
+	strings map[string]uint64
 }
 
-type Ref struct {
-	s string /* String identifier */
-	v uint64 /* Value of the current refcount */
-}
-
-func (refmap *Map) Create(s string) uint64 {
-	refmap.Mutex.Lock()
-	defer refmap.Mutex.Unlock()
-	ref, found := refmap.Lookup[s]
+func (m *Map) Create(s string) uint64 {
+	ref, found := m.strings[s]
 	if found {
 		return ref
 	}
-	refmap.val += 1
-	ref = refmap.val
-	refmap.Lookup[s] = ref
-	refmap.Info[ref] = &Ref{s: s, v: One}
+	m.lastRef += 1
+	ref = m.lastRef
+	m.strings[s] = ref
+	m.refs[ref] = value{s: s}
 	return ref
 }
 
-func (refmap *Map) Delete(s string) {
-	refmap.Mutex.Lock()
-	defer refmap.Mutex.Unlock()
-	ref, found := refmap.Lookup[s]
+func (m *Map) Decr(s string, by int) {
+	ref, found := m.strings[s]
 	if !found {
 		return
 	}
-	delete(refmap.Lookup, s)
-	delete(refmap.Info, ref)
-}
-
-func (refmap *Map) DeleteRef(v uint64) {
-	refmap.Mutex.Lock()
-	defer refmap.Mutex.Unlock()
-	ref, found := refmap.Info[v]
-	if !found {
-		return
+	value := m.refs[ref]
+	value.count -= by
+	if value.count <= 0 {
+		delete(m.strings, value.s)
+		delete(m.refs, ref)
 	}
-	delete(refmap.Lookup, ref.s)
-	delete(refmap.Info, v)
 }
 
-func (refmap *Map) Get(s string) uint64 {
-	refmap.Mutex.RLock()
-	defer refmap.Mutex.RUnlock()
-	if ref, found := refmap.Lookup[s]; found {
-		return ref
-	}
-	return Zero
-}
-
-func (refmap *Map) Incref(s string, incref int) uint64 {
-	refmap.Mutex.Lock()
-	defer refmap.Mutex.Unlock()
-	ref, found := refmap.Lookup[s]
+func (m *Map) DecrRef(ref uint64, by int) {
+	value, found := m.refs[ref]
 	if found {
-		refmap.Info[ref].v += uint64(incref)
-		return ref
-	}
-	refmap.val += 1
-	ref = refmap.val
-	refmap.Lookup[s] = ref
-	refmap.Info[ref] = &Ref{s: s, v: uint64(incref)}
-	return ref
-}
-
-func (refmap *Map) Decref(s string, decref int) {
-	refmap.Mutex.Lock()
-	defer refmap.Mutex.Unlock()
-	ref, found := refmap.Lookup[s]
-	if !found {
-		return
-	}
-	i := refmap.Info[ref]
-	v := i.v - uint64(decref)
-	if v <= 0 {
-		delete(refmap.Lookup, i.s)
-		delete(refmap.Info, ref)
-	}
-}
-
-func (refmap *Map) MultiGet(xs ...string) []uint64 {
-	resp := make([]uint64, len(xs))
-	refmap.Mutex.RLock()
-	defer refmap.Mutex.RUnlock()
-	for idx, s := range xs {
-		if ref, found := refmap.Lookup[s]; found {
-			resp[idx] = ref
-		} else {
-			resp[idx] = Zero
+		value.count -= by
+		if value.count <= 0 {
+			delete(m.strings, value.s)
+			delete(m.refs, ref)
 		}
 	}
-	return resp
 }
 
-func (refmap *Map) ReverseLookup(id uint64) (s string) {
-	refmap.Mutex.RLock()
-	defer refmap.Mutex.RUnlock()
-	if ref, found := refmap.Info[id]; found {
-		return ref.s
+func (m *Map) Delete(s string) {
+	ref, found := m.strings[s]
+	if !found {
+		return
 	}
-	return
+	delete(m.strings, s)
+	delete(m.refs, ref)
 }
 
-func NewWithVal(start uint64) *Map {
-	info := make(map[uint64]*Ref)
-	lookup := make(map[string]uint64)
-	refmap := &Map{Info: info, Lookup: lookup, val: start}
-	return refmap
+func (m *Map) DeleteRef(ref uint64) {
+	value, found := m.refs[ref]
+	if !found {
+		return
+	}
+	delete(m.strings, value.s)
+	delete(m.refs, ref)
+}
+
+func (m *Map) Get(s string) uint64 {
+	if ref, found := m.strings[s]; found {
+		return ref
+	}
+	return 0
+}
+
+func (m *Map) Incr(s string, by int) uint64 {
+	ref, found := m.strings[s]
+	if found {
+		value := m.refs[ref]
+		value.count += by
+		return ref
+	}
+	m.lastRef += 1
+	ref = m.lastRef
+	m.strings[s] = ref
+	m.refs[ref] = value{count: by, s: s}
+	return ref
+}
+
+func (m *Map) IncrRef(ref uint64, by int) {
+	value, found := m.refs[ref]
+	if found {
+		value.count += by
+	}
+}
+
+func (m *Map) Lookup(ref uint64) (string, bool) {
+	if value, found := m.refs[ref]; found {
+		return value.s, true
+	}
+	return "", false
 }
 
 func New() *Map {
-	return NewWithVal(Zero)
+	return &Map{
+		lastRef: 0,
+		refs:    map[uint64]value{},
+		strings: map[string]uint64{},
+	}
+}
+
+func StartingFrom(start uint64) *Map {
+	return &Map{
+		lastRef: start,
+		refs:    map[uint64]value{},
+		strings: map[string]uint64{},
+	}
 }
