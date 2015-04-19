@@ -292,7 +292,7 @@ func (p *Parser) Parse(args []string) (remainder []string) {
 
 		subcommands, err := shlex.Split(args[0])
 		if err != nil {
-			os.Exit(1)
+			process.Exit(1)
 		}
 
 		words = words[len(subcommands):]
@@ -333,10 +333,10 @@ func (p *Parser) Parse(args []string) (remainder []string) {
 				if p.haltFlagParsing {
 					if p.haltFlagParsingString != "" {
 						if word == p.haltFlagParsingString {
-							os.Exit(1)
+							process.Exit(1)
 						}
 					} else if (compWord - optCount) == p.haltFlagParsingN {
-						os.Exit(1)
+						process.Exit(1)
 					}
 				}
 			}
@@ -352,7 +352,7 @@ func (p *Parser) Parse(args []string) (remainder []string) {
 					op, ok := p.long2options[prev]
 					if ok && op.label != "" {
 						if op.completer == nil {
-							os.Exit(1)
+							process.Exit(1)
 						} else {
 							completer = op.completer
 						}
@@ -361,7 +361,7 @@ func (p *Parser) Parse(args []string) (remainder []string) {
 					op, ok := p.short2options[prev]
 					if ok && op.label != "" {
 						if op.completer == nil {
-							os.Exit(1)
+							process.Exit(1)
 						} else {
 							completer = op.completer
 						}
@@ -376,7 +376,7 @@ func (p *Parser) Parse(args []string) (remainder []string) {
 					}
 				}
 				fmt.Print(strings.Join(completions, " "))
-				os.Exit(1)
+				process.Exit(1)
 			}
 		}
 
@@ -407,7 +407,7 @@ func (p *Parser) Parse(args []string) (remainder []string) {
 		}
 
 		fmt.Print(strings.Join(completions, " "))
-		os.Exit(1)
+		process.Exit(1)
 
 	}
 
@@ -467,10 +467,10 @@ func (p *Parser) Parse(args []string) (remainder []string) {
 		if op.valueType == boolValue {
 			if op.longFlag == "--help" && p.ParseHelp {
 				p.PrintUsage()
-				os.Exit(1)
+				process.Exit(1)
 			} else if op.longFlag == "--version" && p.ParseVersion {
 				fmt.Printf("%s\n", p.version())
-				os.Exit(0)
+				process.Exit(0)
 			}
 			v := op.value.(*bool)
 			*v = true
@@ -594,7 +594,7 @@ func getCompletionData() (complete bool, words []string, compWord int, prefix st
 
 		compWord, err = strconv.Atoi(os.Getenv("COMP_CWORD"))
 		if err != nil {
-			os.Exit(1)
+			process.Exit(1)
 		}
 
 		if compWord > 0 {
@@ -654,7 +654,7 @@ func Commands(name string, version interface{}, commands map[string]func([]strin
 		} else {
 			exit(fmt.Sprintf("%s: no such option: %s", name, command))
 		}
-		os.Exit(0)
+		process.Exit(0)
 	}
 
 	if _, ok := commands["help"]; !ok {
@@ -667,7 +667,7 @@ func Commands(name string, version interface{}, commands map[string]func([]strin
 
 			if len(helpArgs) == 0 {
 				fmt.Print(mainUsage)
-				os.Exit(1)
+				process.Exit(1)
 			}
 
 			if len(helpArgs) != 1 {
@@ -685,7 +685,7 @@ func Commands(name string, version interface{}, commands map[string]func([]strin
 				callCommand(command, []string{name, "--help"}, false)
 			}
 
-			os.Exit(1)
+			process.Exit(1)
 
 		}
 		commands["-h"] = commands["help"]
@@ -784,7 +784,7 @@ Run "%s help <command>" for more info on a specific command.
 				}
 			}
 			fmt.Print(strings.Join(completions, " "))
-			os.Exit(1)
+			process.Exit(1)
 		} else {
 			command := words[baseLength]
 			args = []string{name}
@@ -796,7 +796,7 @@ Run "%s help <command>" for more info on a specific command.
 
 	if len(args) == 0 {
 		fmt.Print(mainUsage)
-		os.Exit(1)
+		process.Exit(1)
 	}
 
 	command := args[0]
