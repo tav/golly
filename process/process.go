@@ -44,6 +44,10 @@ func handleSignals() {
 	}
 }
 
+func prepend(xs []func(), handler func()) []func() {
+	return append([]func(){handler}, xs...)
+}
+
 func Exit(code int) {
 	for _, handler := range SignalHandlers[os.Interrupt] {
 		handler()
@@ -52,12 +56,12 @@ func Exit(code int) {
 }
 
 func SetExitHandler(handler func()) {
-	SignalHandlers[syscall.SIGTERM] = append(SignalHandlers[syscall.SIGTERM], handler)
-	SignalHandlers[os.Interrupt] = append(SignalHandlers[os.Interrupt], handler)
+	SignalHandlers[syscall.SIGTERM] = prepend(SignalHandlers[syscall.SIGTERM], handler)
+	SignalHandlers[os.Interrupt] = prepend(SignalHandlers[os.Interrupt], handler)
 }
 
 func SetSignalHandler(signal os.Signal, handler func()) {
-	SignalHandlers[signal] = append(SignalHandlers[signal], handler)
+	SignalHandlers[signal] = prepend(SignalHandlers[signal], handler)
 }
 
 func CreatePidFile(path string) error {
