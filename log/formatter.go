@@ -4,7 +4,7 @@
 package log
 
 import (
-	"code.google.com/p/go.crypto/ssh/terminal"
+	"github.com/golang/crypto/ssh/terminal"
 	"encoding/json"
 	"io"
 	"os"
