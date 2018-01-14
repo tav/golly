@@ -1,4 +1,4 @@
-// Public Domain (-) 2010-2015 The Golly Authors.
+// Public Domain (-) 2010-2018 The Golly Authors.
 // See the Golly UNLICENSE file for details.
 
 // Package optparse provides utility functions for the parsing and
@@ -7,20 +7,23 @@ package optparse
 
 import (
 	"fmt"
-	"github.com/flynn/go-shlex"
-	"github.com/tav/golly/log"
-	"github.com/tav/golly/process"
-	"github.com/tav/golly/structure"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/flynn/go-shlex"
+	"github.com/tav/golly/log"
+	"github.com/tav/golly/process"
+	"github.com/tav/golly/structure"
 )
 
 type valueType int
 
 const (
 	boolValue valueType = iota
+	durationValue
 	intValue
 	intSliceValue
 	stringValue
@@ -157,6 +160,37 @@ func (p *Parser) newOpt(description string, showLabel bool) *option {
 	return op
 }
 
+// Bool defines a new option with the given description and
+// optional default value.
+func (p *Parser) Bool(description string) *bool {
+	v := false
+	op := p.newOpt(description, false)
+	op.valueType = boolValue
+	op.value = &v
+	return &v
+}
+
+// Duration defines a new option with the given description and optional default
+// value.
+func (p *Parser) Duration(description string, defaultValue ...time.Duration) *time.Duration {
+	v := time.Duration(0)
+	if len(defaultValue) > 0 {
+		v = defaultValue[0]
+	} else if strings.HasSuffix(description, "]") {
+		if idx := strings.LastIndex(description, "["); idx != 1 {
+			var err error
+			v, err = time.ParseDuration(description[idx+1 : len(description)-1])
+			if err != nil {
+				exit("optparse: could not parse default value from: %s", description)
+			}
+		}
+	}
+	op := p.newOpt(description, true)
+	op.valueType = durationValue
+	op.value = &v
+	return &v
+}
+
 // Int defines a new option with the given description and
 // optional default value.
 func (p *Parser) Int(description string, defaultValue ...int) *int {
@@ -191,16 +225,6 @@ func (p *Parser) String(description string, defaultValue ...string) *string {
 	}
 	op := p.newOpt(description, true)
 	op.valueType = stringValue
-	op.value = &v
-	return &v
-}
-
-// Bool defines a new option with the given description and
-// optional default value.
-func (p *Parser) Bool(description string) *bool {
-	v := false
-	op := p.newOpt(description, false)
-	op.valueType = boolValue
 	op.value = &v
 	return &v
 }
@@ -476,6 +500,18 @@ func (p *Parser) Parse(args []string) (remainder []string) {
 			*v = true
 			op.defined = true
 			idx += 1
+		} else if op.valueType == durationValue {
+			if idx == argLength {
+				exit("%s: no value specified for %s", args[0], arg)
+			}
+			durationValue, err := time.ParseDuration(args[idx+1])
+			if err != nil {
+				exit("%s: couldn't convert %s value '%s' to a duration", args[0], arg, args[idx+1])
+			}
+			v := op.value.(*time.Duration)
+			*v = durationValue
+			op.defined = true
+			idx += 2
 		} else if op.valueType == stringValue {
 			if idx == argLength {
 				exit("%s: no value specified for %s", args[0], arg)
