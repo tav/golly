@@ -796,7 +796,7 @@ func Commands(name string, version interface{}, commands map[string]func([]strin
 	}
 
 	mainUsage += fmt.Sprintf("Usage: %s COMMAND [OPTIONS]\n\n%sCommands:\n\n", name, prefix)
-	usageLine := fmt.Sprintf("    %%-%ds %%s\n", padding)
+	usageLine := fmt.Sprintf("    %%-%ds  %%s\n", padding)
 
 	for _, key := range usageKeys {
 		mainUsage += fmt.Sprintf(usageLine, key, commandsUsage[key])
