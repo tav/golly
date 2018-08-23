@@ -24,6 +24,7 @@ type valueType int
 const (
 	boolValue valueType = iota
 	durationValue
+	floatValue
 	intValue
 	intSliceValue
 	stringValue
@@ -187,6 +188,27 @@ func (p *Parser) Duration(description string, defaultValue ...time.Duration) *ti
 	}
 	op := p.newOpt(description, true)
 	op.valueType = durationValue
+	op.value = &v
+	return &v
+}
+
+// Float defines a new option with the given description and optional default
+// value.
+func (p *Parser) Float(description string, defaultValue ...float64) *float64 {
+	var v float64
+	if len(defaultValue) > 0 {
+		v = defaultValue[0]
+	} else if strings.HasSuffix(description, "]") {
+		if idx := strings.LastIndex(description, "["); idx != 1 {
+			var err error
+			v, err = strconv.ParseFloat(description[idx+1:len(description)-1], 64)
+			if err != nil {
+				exit("optparse: could not parse default value from: %s", description)
+			}
+		}
+	}
+	op := p.newOpt(description, true)
+	op.valueType = floatValue
 	op.value = &v
 	return &v
 }
@@ -530,6 +552,18 @@ func (p *Parser) Parse(args []string) (remainder []string) {
 			}
 			v := op.value.(*int)
 			*v = intValue
+			op.defined = true
+			idx += 2
+		} else if op.valueType == floatValue {
+			if idx == argLength {
+				exit("%s: no value specified for %s", args[0], arg)
+			}
+			floatValue, err := strconv.ParseFloat(args[idx+1], 64)
+			if err != nil {
+				exit("%s: couldn't convert %s value '%s' to a float", args[0], arg, args[idx+1])
+			}
+			v := op.value.(*float64)
+			*v = floatValue
 			op.defined = true
 			idx += 2
 		}
