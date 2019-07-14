@@ -123,20 +123,16 @@ func Init(runPath, name string) error {
 
 // GetIP tries to determine the IP address of the current machine.
 func GetIP() (string, error) {
-	hostname, err := os.Hostname()
-	if err != nil {
-		return "", err
-	}
-	addrs, err := net.LookupHost(hostname)
+	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		return "", err
 	}
 	var ip string
 	for _, addr := range addrs {
-		if strings.Contains(addr, ":") || strings.HasPrefix(addr, "127.") {
+		if strings.Contains(addr.String(), ":") || strings.HasPrefix(addr.String(), "127.") || strings.HasPrefix(addr.String(), "172.") {
 			continue
 		}
-		ip = addr
+		ip = strings.Split(addr.String(), "/")[0]
 		break
 	}
 	if ip == "" {
